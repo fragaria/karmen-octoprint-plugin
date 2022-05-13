@@ -1,0 +1,4 @@
+include README.md
+recursive-include octoprint_karmen/templates *
+recursive-include octoprint_karmen/translations *
+recursive-include octoprint_karmen/static *
