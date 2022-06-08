@@ -24,8 +24,6 @@ class KarmenPlugin(
 
     def get_settings_restricted_paths(self):
         return {
-            "admin": [],
-            "user": [],
             "never": [["ws_server"], ["karmen_key"]],
         }
 
@@ -76,8 +74,7 @@ class KarmenPlugin(
         ws_server_url = self._settings.get(["ws_server"])
         key = self._settings.get(["karmen_key"])
 
-        api_port = settings().get(["server", "port"])
-        api_url = f"localhost:{api_port}"
+        api_url = f"{self.host}:{self.port}"
         url = f"{ws_server_url}/{key}"
         if key == "":
             self._logger.info("No Karmen device key provided; Not connecting.")
@@ -89,6 +86,10 @@ class KarmenPlugin(
         self._logger.info("🍓 Karmen plugin reconnecting...")
         self.con.disconnect()
         self.ws_proxy_connect()
+
+    def on_startup(self, host, port):
+        self.host = host
+        self.port = port
 
     def on_after_startup(self):
         self._logger.info("🍓 Karmen plugin is starting...")
