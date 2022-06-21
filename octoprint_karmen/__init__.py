@@ -24,7 +24,7 @@ class KarmenPlugin(
 
     def get_settings_restricted_paths(self):
         return {
-            "never": [["ws_server"], ["karmen_key"]],
+            "admin": [["ws_server"], ["karmen_key"]],
         }
 
     def get_template_vars(self):
