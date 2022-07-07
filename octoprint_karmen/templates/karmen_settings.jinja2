@@ -16,9 +16,22 @@ Karmen</h3>
         </div>
         <small>
         <div class="help-block">Connector won't connect when empty.</div>
+        {% if plugin_karmen_karmen_key_redacted %}
+        <div class="help-block">Current key: {{plugin_karmen_karmen_key_redacted}}</div>
+        {% endif %}
         <div>
         <h4>Confirm you understand what will happen</h4>
             By connecting your Octoprint installation to Karmen Cloud, you confirm you understand that Karmen Cloud will acquire full control over your device.
+            <br/>
+            <p>
+            This plugin will allow requests to these URLs:
+            <ul>
+                {% for wl in plugin_karmen_path_whitelist %}
+                <li>http://localhost:{{plugin_karmen_api_port}}{{wl}}*</li>
+                {% endfor %}
+                <li>{{ plugin_karmen_snapshot_url }}</li>
+            </ul>
+            </p>
         <h4>API key security</h4>   
         <ul>
             <li>Never share your keys with ANYONE.</li>
@@ -33,10 +46,20 @@ Karmen</h3>
         <div><small><a href="#" class="muted" data-bind="toggleContent: { class: 'fa-caret-right fa-caret-down', parent: '.form-horizontal', container: '.hide' }"><i class="fas
          fa-caret-right"></i> Advanced options</a></small></div>
         <div class="hide">
+            <div>
+                Don't modify unless you know what are you doing. 
+            </div>
             <div class="control-group">
                 <label class="control-label">{{ _('Websocket server address:') }}</label>
                 <div class="controls">
                     <input type="text" class="input-block-level" data-bind="value: settings.plugins.karmen.ws_server">
+                </div>
+            </div>
+            <div class="control-group">
+                <label class="control-label">{{ _('Path whitelist:') }}</label>
+                <div class="controls">
+                    <input type="text" class="input-block-level" data-bind="value: settings.plugins.karmen.path_whitelist">
+                    <small>separate with ;</small>
                 </div>
             </div>
         </div>

@@ -20,17 +20,28 @@ class KarmenPlugin(
         return {
             "ws_server": "wss://cloud.karmen.tech/ws",
             "karmen_key": "",
+            "path_whitelist": "/api/"
         }
 
     def get_settings_restricted_paths(self):
         return {
-            "admin": [["ws_server"], ["karmen_key"]],
+            "admin": [["ws_server"], ["karmen_key"], ["path_whitelist"]],
         }
 
     def get_template_vars(self):
+        host = 'localhost' if self.host == '::' else self.host
+        key = self._settings.get(["karmen_key"])
+        if (key and len(key) <= 4):
+            key_redacted = key
+        else:
+            key_redacted = (key[:2] + "*" * (len(key) - 4) + key[-2:]) if key else None
         return {
             "ws_server": self._settings.get(["ws_server"]),
-            "karmen_key": self._settings.get(["karmen_key"]),
+            "path_whitelist": list(filter(None, self._settings.get(["path_whitelist"]).split(";"))),
+            "api_port": self.port,
+            "api_host": host,
+            "karmen_key_redacted": key_redacted,
+            "snapshot_url": settings().get(["webcam", "snapshot"])
         }
 
     def get_template_configs(self):
@@ -76,10 +87,10 @@ class KarmenPlugin(
 
         api_url = f"{self.host}:{self.port}"
         url = f"{ws_server_url}/{key}"
-        if key == "":
+        if not key:
             self._logger.info("No Karmen device key provided; Not connecting.")
             return
-        self.con = Connector(url, api_url, self._logger)
+        self.con = Connector(url, api_url, self._logger, self._settings.get(["path_whitelist"]))
         self.con.connect()
 
     def ws_proxy_reconnect(self):

@@ -1,14 +1,16 @@
 import http
+from importlib.resources import path
 import websocket
 import json
 import threading
 import time
 import logging
 from enum import Enum
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 import io
 from .buffer_struct import Struct, BytesField, UIntField
-from urllib.parse import urljoin
+from octoprint.settings import settings
+from functools import cached_property
 
 logging.basicConfig(level=logging.DEBUG)
 
@@ -44,11 +46,12 @@ class ForwarderMessage:
 
 
 class RequestForwarder:
-    def __init__(self, base_uri, ws, logger):
+    def __init__(self, base_uri, ws, logger, path_whitelist):
         self.base_uri = base_uri
         self.ws = ws
         self._channels = {}
         self.logger = logger
+        self.path_whitelist = path_whitelist
 
     def handle_request(self, message):
         channel_id = message.channel
@@ -78,7 +81,7 @@ class Channel:
             "end": self.handle_end,
         }
         self.handler = handler
-        self.connection = http.client.HTTPConnection(handler.base_uri)
+        self.connection = None
         self.logger = handler.logger
 
     def handle_message(self, message):
@@ -88,6 +91,16 @@ class Channel:
         else:
             self.logger.warning("Unknown event:", event)
 
+
+    @cached_property
+    def snapshot_url(self):
+        s = settings()
+        return s.get(["webcam", "snapshot"])
+
+    @cached_property
+    def path_whitelist(self):
+        return list(filter(None, self.handler.path_whitelist.split(";")))
+
     def handle_headers(self, message):
         ireq = message.data
         forward_to_url = urljoin(self.handler.base_uri, ireq["url"])
@@ -96,13 +109,37 @@ class Channel:
             "url": forward_to_url,
             "headers": ireq.get("headers"),
             "params": ireq.get("search", ""),
+            "port": ireq.get("headers", {}).get("x-karmen-port")
         }
         headers = ireq.get("headers")
 
         if headers["host"]:
             del headers["host"]
-
+        # For requests with x-karmen-port header check if this port matches webcam snapshot port
+        if self.req_params["port"]:
+            if self.snapshot_url:
+                parsed = urlparse(self.snapshot_url)
+                port = parsed.port
+                host = parsed.hostname
+                if port == int(self.req_params["port"]):
+                    self.connection = http.client.HTTPConnection(host, port=port)
+                else:
+                    self.logger.warning(f"Only allowed port is snapshot port {port}")
+                    self.handle_error()
+                    return 
+            else:
+                self.logger.warning(f"Access to non default port is allowed for snapshot url only")
+                self.handle_error()
+                return
+        else:
+            # For octoprint requests check if path starts with /api/ so only API calls are allowed
+            if not self.req_params["url"].startswith(tuple(self.path_whitelist)):
+                self.logger.warning(f"Access to non-whitelisted url is not allowed")
+                self.handle_error()
+                return 
+            self.connection = http.client.HTTPConnection(self.handler.base_uri)
         self.connection.connect()
+
         self.logger.debug(
             f'incoming request: {self.id} {self.req_params["method"]} {ireq["url"]}'
         )
@@ -118,22 +155,33 @@ class Channel:
         self.connection.send(message.data.encode())
 
     def handle_end(self, message):
-        response = self.connection.getresponse()
-        headers = response.getheaders()
-        body = response.read()
-        status = response.status
-        self.logger.debug(f"reply to request: {self.id} {status} {response.reason}")
+        if self.connection:
+            response = self.connection.getresponse()
+            headers = response.getheaders()
+            body = response.read()
+            status = response.status
+            self.logger.debug(f"reply to request: {self.id} {status} {response.reason}")
+            self.send(
+                "headers",
+                {
+                    "statusCode": status,
+                    "statusMessage": response.reason,
+                    "headers": headers,
+                },
+            )
+            self.send("data", body)
+            self.connection.close()
+        self.send("end")
+        
+
+    def handle_error(self, status=400, msg="Invalid request"):
         self.send(
             "headers",
             {
                 "statusCode": status,
-                "statusMessage": response.reason,
-                "headers": headers,
+                "statusMessage": msg,
             },
         )
-        self.send("data", body)
-        self.send("end")
-        self.connection.close()
 
     def send(self, event, data=None):
         data_type = MessageType.BUFFER
@@ -157,7 +205,7 @@ class Channel:
 
 
 class Connector:
-    def __init__(self, ws_url, base_uri, logger):
+    def __init__(self, ws_url, base_uri, logger, whitelist):
         self.ws_url = ws_url
         self.ws = None
         self.ws_thread = None
@@ -165,6 +213,7 @@ class Connector:
         self.ws_thread_stop = False
         self.base_uri = base_uri
         self.logger = logger
+        self.path_whitelist = whitelist
 
     def on_message(self, ws, message):
         try:
@@ -184,7 +233,7 @@ class Connector:
 
     def on_open(self, ws):
         self.logger.info("Opened connection")
-        self.request_forwarder = RequestForwarder(self.base_uri, self.ws, self.logger)
+        self.request_forwarder = RequestForwarder(self.base_uri, self.ws, self.logger, self.path_whitelist)
 
     def connect(self, sleep=0):
         time.sleep(sleep)

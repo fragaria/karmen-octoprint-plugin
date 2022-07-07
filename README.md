@@ -29,7 +29,7 @@ For configuration check [documentation](https://docs.karmen.tech/#/karmen-octo-p
 
 ## Secure communication
 
-Security is a key concern to us. Rest assured, your device public address will not be exposed when using this plugin. Rather, communication between Karmen and your Octoprint installation is made using a secure WebSocket channel protected by HTTPS protocol which is used by major organizations like eshops, banks and others. 
+Security is a key concern to us. Rest assured, your device public address will not be exposed when using this plugin. Rather, communication between Karmen and your Octoprint installation is made using a secure WebSocket channel protected by HTTPS protocol which is used by major organizations like eshops, banks and others.
 
 Karmen also uses key exchange to ensure it speaks to the expected device on the other end. Key set is established during the initial setup.
 
