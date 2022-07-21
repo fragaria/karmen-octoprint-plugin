@@ -10,7 +10,7 @@ from urllib.parse import urljoin, urlparse
 import io
 from .buffer_struct import Struct, BytesField, UIntField
 from octoprint.settings import settings
-from functools import cached_property
+from werkzeug.utils import cached_property
 
 logging.basicConfig(level=logging.DEBUG)
 
