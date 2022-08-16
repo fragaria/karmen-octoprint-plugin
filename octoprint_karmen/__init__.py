@@ -109,7 +109,8 @@ class KarmenPlugin(
 
     def on_shutdown(self):
         self._logger.info("🍓 Karmen plugin shutdown...")
-        self.con.disconnect()
+        if self.con:
+            self.con.disconnect()
 
 
 __plugin_name__ = "Karmen Connector"
