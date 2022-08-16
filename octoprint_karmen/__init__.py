@@ -95,7 +95,8 @@ class KarmenPlugin(
 
     def ws_proxy_reconnect(self):
         self._logger.info("🍓 Karmen plugin reconnecting...")
-        self.con.disconnect()
+        if self.con:
+            self.con.disconnect()
         self.ws_proxy_connect()
 
     def on_startup(self, host, port):
