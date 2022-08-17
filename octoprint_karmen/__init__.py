@@ -100,6 +100,7 @@ class KarmenPlugin(
         self.ws_proxy_connect()
 
     def on_startup(self, host, port):
+        self.con = None
         self.host = host
         self.port = port
 
