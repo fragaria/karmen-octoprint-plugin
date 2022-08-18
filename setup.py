@@ -21,10 +21,10 @@ plugin_version = "0.3.0"
 plugin_description = """Plugin for connecting Octoprint to Karmen. See karmen.tech for details."""
 
 # The plugin's author. Can be overwritten within OctoPrint's internal data via __plugin_author__ in the plugin module
-plugin_author = "Pavel Vojacek"
+plugin_author = "Karmen.tech"
 
 # The plugin's author's mail address.
-plugin_author_email = "pavel.vojacek@fragaria.cz"
+plugin_author_email = "karmen@karmen.tech"
 
 # The plugin's homepage URL. Can be overwritten within OctoPrint's internal data via __plugin_url__ in the plugin module
 plugin_url = "https://github.com/fragaria/karmen-octoprint-plugin"
