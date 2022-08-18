@@ -208,11 +208,11 @@ class Connector:
         self.ws_url = ws_url
         self.ws = None
         self.ws_thread = None
-        self.ws_thread_running = False
-        self.ws_thread_stop = False
+        self.should_end = False
         self.base_uri = base_uri
         self.logger = logger
         self.path_whitelist = whitelist
+        self.request_forwarder = None
 
     def on_message(self, ws, message):
         try:
@@ -223,11 +223,12 @@ class Connector:
 
     def on_error(self, ws, error):
         self.logger.error(f"ws error: {error}")
+        self.connect(sleep=5)
 
     def on_close(self, ws, close_status_code, close_msg):
         self.logger.warning(f"Closed connection {close_status_code} {close_msg}")
-        self.request_forwarder.end()
-        self.connect(sleep=5)
+        if self.request_forwarder:
+            self.request_forwarder.end()
 
     def on_open(self, ws):
         self.logger.info("Opened connection")
@@ -243,11 +244,11 @@ class Connector:
             on_close=self.on_close,
         )
         self.ws.on_open = self.on_open
-        wst = threading.Thread(
+        self.ws_thread = threading.Thread(
             target=self.ws.run_forever, kwargs={"skip_utf8_validation": True}
         )
-        wst.daemon = True
-        wst.start()
+        self.ws_thread.daemon = True
+        self.ws_thread.start()
 
     def disconnect(self):
         self.logger.info("Disconnecting...")
