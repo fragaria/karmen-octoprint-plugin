@@ -1,4 +1,5 @@
 import http
+from tarfile import RECORDSIZE
 import websocket
 import json
 import threading
@@ -7,6 +8,7 @@ import logging
 from enum import Enum
 from urllib.parse import urljoin, urlparse
 import io
+import sched, time
 from .buffer_struct import Struct, BytesField, UIntField
 from octoprint.settings import settings
 from werkzeug.utils import cached_property
@@ -69,6 +71,82 @@ class RequestForwarder:
 
     def end(self):
         pass
+
+
+from threading import Timer
+
+class RepeatedTimer(object):
+    def __init__(self, interval, function, *args, **kwargs):
+        self._timer     = None
+        self.function   = function
+        self.interval   = interval
+        self.args       = args
+        self.kwargs     = kwargs
+        self.is_running = False
+        self.start()
+
+    def _run(self):
+        self.is_running = False
+        self.start()
+        self.function(*self.args, **self.kwargs)
+
+    def start(self):
+        if not self.is_running:
+            self._timer = Timer(self.interval, self._run)
+            self._timer.start()
+            self.is_running = True
+
+    def stop(self):
+        self._timer.cancel()
+        self.is_running = False
+
+
+class PingPonger:
+    def __init__(self, ws, logger, reconnect_fn):
+        self.logger = logger
+        self.timer = None
+        self.ws = ws
+        self.gotPong = True
+        self.reconnect_fn = reconnect_fn
+
+    def handle_request(self, message):
+        if message.event == "pong":
+            self.gotPong = True
+        self.logger.warning(message)
+
+    def ping(self):
+        if not self.gotPong:
+            self.logger.warning("No pong response received")
+            try:
+                self.end()
+                self.reconnect_fn()
+                return
+            except Exception as e:
+                self.logger.error("Unable to reconnect", e)
+        else:
+            self.logger.debug("Going to ping")
+            buf = io.BytesIO()
+            msg = {
+                "channel": str.encode("ping-pong"),
+                "event": str.encode("ping"),
+                "dataType": MessageType.NONE.value,
+                "data": b"",
+            }
+
+            BufferMessage.pack(msg, buf)
+            buf.seek(0)
+            self.ws.send(buf.read(), websocket.ABNF.OPCODE_BINARY)
+            self.gotPong = False
+
+    def start(self):
+        self.logger.debug("Starting ping-pong")
+        self.timer = RepeatedTimer(10, self.ping)
+
+    def end(self, reconnect=False):
+        if self.timer:
+            self.timer.stop()
+        if reconnect:
+            self.start()
 
 
 class Channel:
@@ -213,13 +291,21 @@ class Connector:
         self.logger = logger
         self.path_whitelist = whitelist
         self.request_forwarder = None
+        self.timer = None
 
     def on_message(self, ws, message):
-        try:
-            data = ForwarderMessage(message)
-            self.request_forwarder.handle_request(data)
-        except Exception as e:
-            logging.error(e)
+        if message.channel == 'ping-pong':
+            try:
+                self.ping_pong.handle_request(message)
+            except Exception as e:
+                logging.error(e)
+        else:
+            try:
+                data = ForwarderMessage(message)
+                self.request_forwarder.handle_request(data)
+            except Exception as e:
+                logging.error(e)
+
 
     def on_error(self, ws, error):
         self.logger.error(f"ws error: {error}")
@@ -229,10 +315,14 @@ class Connector:
         self.logger.warning(f"Closed connection {close_status_code} {close_msg}")
         if self.request_forwarder:
             self.request_forwarder.end()
+        self.ping_pong.end()
+        self.connect(sleep=5)
 
     def on_open(self, ws):
         self.logger.info("Opened connection")
         self.request_forwarder = RequestForwarder(self.base_uri, self.ws, self.logger, self.path_whitelist)
+        self.ping_pong = PingPonger(self.ws, self.logger, self.reconnect)
+        self.ping_pong.start()       
 
     def connect(self, sleep=0):
         time.sleep(sleep)
@@ -250,6 +340,12 @@ class Connector:
         self.ws_thread.daemon = True
         self.ws_thread.start()
 
+    def reconnect(self):
+        self.logger.info("Reconnect...")
+        self.disconnect()
+        self.connect(sleep=1)
+
     def disconnect(self):
         self.logger.info("Disconnecting...")
+        # self.ping_pong.stop()
         self.ws.close()
