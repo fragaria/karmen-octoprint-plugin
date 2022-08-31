@@ -71,8 +71,21 @@ class KarmenPlugin(
                 "user": "fragaria",
                 "repo": "karmen-octoprint-plugin",
                 "current": self._plugin_version,
+                "prerelease": True,
                 # update method: pip
                 "pip": "https://github.com/fragaria/karmen-octoprint-plugin/archive/{target_version}.zip",
+                "stable_branch": {
+                    "name": "Stable",
+                    "branch": "main",
+                    "comittish": ["main"],
+                },
+                "prerelease_branches": [
+                    {
+                        "name": "Release Candidate",
+                        "branch": "rc",
+                        "comittish": ["rc", "main"],
+                    }
+                ]
             }
         }
 
