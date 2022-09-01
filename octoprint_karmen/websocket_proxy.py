@@ -309,7 +309,6 @@ class Connector:
 
     def on_error(self, ws, error):
         self.logger.error(f"ws error: {error}")
-        self.connect(sleep=5)
 
     def on_close(self, ws, close_status_code, close_msg):
         self.logger.warning(f"Closed connection {close_status_code} {close_msg}")
