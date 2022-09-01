@@ -66,3 +66,20 @@ By connecting your Octoprint installation to Karmen Cloud, you confirm you under
 ## Contacts & support
 
 We’ll gladly answer all your questions or comments. Please get in touch at <karmen@karmen.tech>. Thank you for your interest and support!
+
+## Release
+
+To release new version please read: <https://github.com/cp2004/OctoPrint-Knowledge/blob/main/release-channels.md>
+
+- Merge changes to `rc` branch for release candidate and to `main` branch for stable release.
+
+- Change version number in `setup.py`. Use `1.2.3rc1` format for rc version, `1.2.3` for stable version.
+
+- When pushed go to github and create new release
+  - For release canditate create new tag - same as version number from previous step.
+  - Select right branch (`main`/`rc`)
+  - Write version to Release title field.
+  - Add some release description.
+  - For RC check `This is a pre-release` checkbox.
+  - And click `Publish release`.
+  - Done. New version should be available in octoprint updates soon.
