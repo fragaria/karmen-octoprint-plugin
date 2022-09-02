@@ -294,14 +294,18 @@ class Connector:
         self.timer = None
 
     def on_message(self, ws, message):
-        if message.channel == 'ping-pong':
+        try:
+            data = ForwarderMessage(message)
+        except Exception as e:
+            logging.warning(e)
+            return
+        if data.channel == 'ping-pong':
             try:
-                self.ping_pong.handle_request(message)
+                self.ping_pong.handle_request(data)
             except Exception as e:
                 logging.error(e)
         else:
             try:
-                data = ForwarderMessage(message)
                 self.request_forwarder.handle_request(data)
             except Exception as e:
                 logging.error(e)
