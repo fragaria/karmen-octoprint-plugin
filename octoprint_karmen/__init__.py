@@ -92,7 +92,9 @@ class KarmenPlugin(
     def on_settings_save(self, data):
         octoprint.plugin.SettingsPlugin.on_settings_save(self, data)
         self._logger.info("Settings saved")
-        self.ws_proxy_reconnect()
+        if self.con:
+            self.con.disconnect()
+        self.con.reconnect()
 
     def ws_proxy_connect(self):
         ws_server_url = self._settings.get(["ws_server"])
