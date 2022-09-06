@@ -148,11 +148,15 @@ class Channel:
         self.logger = handler.logger
 
     def handle_message(self, message):
-        event = message.event
-        if event in self.event_handlers.keys():
-            self.event_handlers[event](message)
-        else:
-            self.logger.warning("Unknown event:", event)
+        try:
+            event = message.event
+            if event in self.event_handlers.keys():
+                self.event_handlers[event](message)
+            else:
+                self.logger.warning("Unknown event:", event)
+        except Exception as e:
+            self.logger.debug(e)
+            self.handle_error()
 
 
     @cached_property
@@ -194,10 +198,19 @@ class Channel:
                 self.logger.warning(f"Access to non default port is allowed for snapshot url only")
                 self.handle_error()
                 return
+        elif self.req_params["url"] == '/karmen-pill-info/get':
+            self.send("headers", {                    
+                    "statusCode": 200,
+                    "statusMessage": "OK",
+                    "headers": [("Content-type","application/json")],
+                    })
+            self.send("data", json.dumps({"system":{"karmen_versin": f"plugin"}}).encode())
+            self.send("end")
+            return
         else:
             # For octoprint requests check if path starts with /api/ so only API calls are allowed
             if not self.req_params["url"].startswith(tuple(self.path_whitelist)):
-                self.logger.warning(f"Access to non-whitelisted url is not allowed")
+                self.logger.warning(f"Access to non-whitelisted url is not allowed {self.req_params['url']}")
                 self.handle_error()
                 return 
             self.connection = http.client.HTTPConnection(self.handler.base_uri)
@@ -245,6 +258,10 @@ class Channel:
                 "statusMessage": msg,
             },
         )
+        self.send("end")
+        if self.connection: 
+            self.connection.close()
+        
 
     def send(self, event, data=None):
         data_type = MessageType.BUFFER
@@ -281,24 +298,24 @@ class Connector:
         self.connected = False
 
     def on_message(self, ws, message):
-        def run(*args):
+        # def run(*args):
+        try:
+            data = ForwarderMessage(message)
+        except Exception as e:
+            logging.warning(e)
+            return
+        if data.channel == 'ping-pong':
             try:
-                data = ForwarderMessage(message)
+                self.ping_pong.handle_request(data)
             except Exception as e:
                 logging.warning(e)
-                return
-            if data.channel == 'ping-pong':
-                try:
-                    self.ping_pong.handle_request(data)
-                except Exception as e:
-                    logging.error(e)
-            else:
-                try:
-                    self.request_forwarder.handle_request(data)
-                except Exception as e:
-                    logging.error(e)
+        else:
+            try:
+                self.request_forwarder.handle_request(data)
+            except Exception as e:
+                logging.error(e)
 
-        threading.Thread(target=run).start()
+        # threading.Thread(target=run).start()
 
 
     def on_error(self, ws, error):
@@ -314,7 +331,7 @@ class Connector:
         self.connected = True
 
     def on_timer_tick(self):
-        self.logger.debug('tick')
+        pass
         if self.connected:
             self.ping_pong.ping(self.disconnect)
         else:
