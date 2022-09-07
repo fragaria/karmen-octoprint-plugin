@@ -71,6 +71,15 @@
                         <small>separate with ;</small>
                     </div>
                 </div>
+                <div>
+                    <label class="control-label">{{ _('Send error tracking data to sentry:') }}</label>
+                    <div class="controls">
+                        <select name="sentry_opt" id="sentry-select" data-bind="value: settings.plugins.karmen.sentry_opt">
+                            <option value="out">{{ _('Disabled') }}</option>
+                            <option value="in">{{ _('Enabled') }}</option>
+                        </select>
+                    </div>
+                </div>
             </div>
         </div>
 

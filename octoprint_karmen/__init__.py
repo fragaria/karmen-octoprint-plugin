@@ -4,7 +4,7 @@ from __future__ import absolute_import
 from octoprint.settings import settings
 import octoprint.plugin
 from .websocket_proxy import Connector
-
+from .utils import SentryWrapper
 
 class KarmenPlugin(
     octoprint.plugin.SettingsPlugin,
@@ -17,15 +17,17 @@ class KarmenPlugin(
     ##~~ SettingsPlugin mixin
 
     def get_settings_defaults(self):
+        self.sentry = SentryWrapper(self)
         return {
             "ws_server": "wss://cloud.karmen.tech/ws",
             "karmen_key": "",
-            "path_whitelist": "/api/"
+            "path_whitelist": "/api/",
+            "sentry_opt": "out",
         }
 
     def get_settings_restricted_paths(self):
         return {
-            "admin": [["ws_server"], ["karmen_key"], ["path_whitelist"]],
+            "admin": [["ws_server"], ["karmen_key"], ["path_whitelist"], ["sentry_opt"]],
         }
 
     def get_template_vars(self):
@@ -41,7 +43,8 @@ class KarmenPlugin(
             "api_port": self.port,
             "api_host": host,
             "karmen_key_redacted": key_redacted,
-            "snapshot_url": settings().get(["webcam", "snapshot"])
+            "snapshot_url": settings().get(["webcam", "snapshot"]),
+            "sentry_opt": settings().get(["sentry_opt"]),
         }
 
     def get_template_configs(self):
@@ -92,6 +95,8 @@ class KarmenPlugin(
     def on_settings_save(self, data):
         octoprint.plugin.SettingsPlugin.on_settings_save(self, data)
         self._logger.info("Settings saved")
+        key = self._settings.get(["karmen_key"])
+        self.sentry.user_context({'id': key})
         if self.con:
             self.con.disconnect()
         self.con.reconnect()
@@ -105,7 +110,7 @@ class KarmenPlugin(
         if not key:
             self._logger.info("No Karmen device key provided; Not connecting.")
             return
-        self.con = Connector(url, api_url, self._logger, self._settings.get(["path_whitelist"]))
+        self.con = Connector(url, api_url, self._logger, self._settings.get(["path_whitelist"]), self.sentry)
         self.con.connect()
 
     def ws_proxy_reconnect(self):
@@ -121,12 +126,18 @@ class KarmenPlugin(
 
     def on_after_startup(self):
         self._logger.info("🍓 Karmen plugin is starting...")
+        if self._settings.get(["sentry_opt"]) == "in":
+            self._logger.info("Karmen sentry is ENABLED")
+            self.sentry.init_context()
         self.ws_proxy_connect()
 
     def on_shutdown(self):
         self._logger.info("🍓 Karmen plugin shutdown...")
         if self.con:
             self.con.disconnect()
+
+    def key(self):
+        return self._settings.get(["karmen_key"])
 
 
 __plugin_name__ = "Karmen Connector"

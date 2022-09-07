@@ -47,12 +47,13 @@ class ForwarderMessage:
 
 
 class RequestForwarder:
-    def __init__(self, base_uri, ws, logger, path_whitelist):
+    def __init__(self, base_uri, ws, logger, path_whitelist, sentry):
         self.base_uri = base_uri
         self.ws = ws
         self._channels = {}
         self.logger = logger
         self.path_whitelist = path_whitelist
+        self.sentry = sentry
 
     def handle_request(self, message):
         channel_id = message.channel
@@ -100,10 +101,11 @@ class RepeatedTimer(object):
 
 
 class PingPonger:
-    def __init__(self, ws, logger):
+    def __init__(self, ws, logger, sentry):
         self.logger = logger
         self.ws = ws
         self.gotPong = True
+        self.sentry = sentry
 
     def handle_request(self, message):
         if message.event == "pong":
@@ -113,12 +115,14 @@ class PingPonger:
     def ping(self, on_close):
         if not self.gotPong:
             self.logger.warning("No pong response received")
+            self.sentry.captureMessage("No pong received")
             try:
                 on_close()
                 self.logger.warning("closing connection")
                 return
             except Exception as e:
                 self.logger.error("Unable to reconnect", e)
+                self.sentry.captureException(e)
         else:
             self.logger.debug("Going to ping")
             buf = io.BytesIO()
@@ -285,7 +289,7 @@ class Channel:
 
 
 class Connector:
-    def __init__(self, ws_url, base_uri, logger, whitelist):
+    def __init__(self, ws_url, base_uri, logger, whitelist, sentry):
         self.ws_url = ws_url
         self.ws = None
         self.ws_thread = None
@@ -296,6 +300,7 @@ class Connector:
         self.request_forwarder = None
         self.timer = RepeatedTimer(10, self.on_timer_tick)
         self.connected = False
+        self.sentry = sentry
 
     def on_message(self, ws, message):
         # def run(*args):
@@ -303,23 +308,28 @@ class Connector:
             data = ForwarderMessage(message)
         except Exception as e:
             logging.warning(e)
+            self.sentry.captureException(e)
             return
         if data.channel == 'ping-pong':
             try:
                 self.ping_pong.handle_request(data)
             except Exception as e:
                 logging.warning(e)
+                self.sentry.captureException(e)
+                return
         else:
             try:
                 self.request_forwarder.handle_request(data)
             except Exception as e:
                 logging.error(e)
+                self.sentry.captureException(e)
 
         # threading.Thread(target=run).start()
 
 
     def on_error(self, ws, error):
         self.logger.error(f"ws error: {error}")
+        self.sentry.captureException(error)
         self.connected = False
 
     def on_close(self, ws, close_status_code, close_msg):
@@ -346,8 +356,8 @@ class Connector:
             on_error=self.on_error,
             on_close=self.on_close,
         )
-        self.request_forwarder = RequestForwarder(self.base_uri, self.ws, self.logger, self.path_whitelist)
-        self.ping_pong = PingPonger(self.ws, self.logger)
+        self.request_forwarder = RequestForwarder(self.base_uri, self.ws, self.logger, self.path_whitelist, self.sentry)
+        self.ping_pong = PingPonger(self.ws, self.logger, self.sentry)
         self.ws.on_open = self.on_open
         self.ws_thread = threading.Thread(
             target=self.ws.run_forever, kwargs={"skip_utf8_validation": True}
