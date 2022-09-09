@@ -95,8 +95,7 @@ class KarmenPlugin(
     def on_settings_save(self, data):
         octoprint.plugin.SettingsPlugin.on_settings_save(self, data)
         self._logger.info("Settings saved")
-        key = self._settings.get(["karmen_key"])
-        self.sentry.user_context({'id': key})
+        self.sentry.init_context()
         if self.con:
             self.con.disconnect()
         self.con.reconnect()
