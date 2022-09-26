@@ -14,7 +14,7 @@ plugin_package = "octoprint_karmen"
 plugin_name = "OctoPrint-Karmen"
 
 # The plugin's version. Can be overwritten within OctoPrint's internal data via __plugin_version__ in the plugin module
-plugin_version = "0.5.0rc2"
+plugin_version = "0.5.0rc3"
 
 # The plugin's description. Can be overwritten within OctoPrint's internal data via __plugin_description__ in the plugin
 # module
@@ -33,7 +33,7 @@ plugin_url = "https://github.com/fragaria/karmen-octoprint-plugin"
 plugin_license = "MIT"
 
 # Any additional requirements besides OctoPrint should be listed here
-plugin_requires = []
+plugin_requires = ['Octoprint>=1.8',]
 
 ### --------------------------------------------------------------------------------------------------------------------
 ### More advanced options that you usually shouldn't have to touch follow after this point
