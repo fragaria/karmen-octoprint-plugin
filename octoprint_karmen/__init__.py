@@ -3,6 +3,7 @@ from __future__ import absolute_import
 
 from octoprint.settings import settings
 import octoprint.plugin
+from octoprint.util.version import is_octoprint_compatible
 from .websocket_proxy import Connector
 from .utils import SentryWrapper
 
@@ -38,6 +39,7 @@ class KarmenPlugin(
         else:
             key_redacted = (key[:2] + "*" * (len(key) - 4) + key[-2:]) if key else None
         return {
+            "is_octoprint_compatible": self.is_octoprint_compatible,
             "ws_server": self._settings.get(["ws_server"]),
             "path_whitelist": list(filter(None, self._settings.get(["path_whitelist"]).split(";"))),
             "api_port": self.port,
@@ -107,8 +109,10 @@ class KarmenPlugin(
         api_url = f"{self.host}:{self.port}"
         url = f"{ws_server_url}/{key}"
         if not key:
-            self._logger.info("No Karmen device key provided; Not connecting.")
+            self._logger.warning("No Karmen device key provided.")
             return
+        if not self.is_octoprint_compatible:
+            self._logger.warning("Incompatible octoprint.")
         self.con = Connector(url, api_url, self._logger, self._settings.get(["path_whitelist"]), self.sentry)
         self.con.connect()
 
@@ -119,6 +123,7 @@ class KarmenPlugin(
         self.ws_proxy_connect()
 
     def on_startup(self, host, port):
+        self.is_octoprint_compatible = is_octoprint_compatible(">1.8")
         self.con = None
         self.host = host
         self.port = port

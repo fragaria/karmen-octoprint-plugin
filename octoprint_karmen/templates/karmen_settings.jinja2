@@ -34,6 +34,7 @@
     </a>
 </div>
 
+{% if is_octoprint_compatible %}
 <div class="karmen-block">
     <form class="form-horizontal">
         <p>
@@ -94,3 +95,17 @@
     <p>Never share your API or device keys with ANYONE.</p>
     <p>Please follow our guidelines and do not use the primary Octoprint key when setting up the Karmen plugin. Rather, create a special key for that purpose as described in our <a href="https://docs.karmen.tech/"/>documentation</a></p>
 </div>
+{% else %}
+<div class=karmen-block">
+    <h4>This version is incompatible with Octoprint 1.7 and lower</h4>
+    <p>You can:</p>
+    <ul>
+    <li>Upgrade Octoprint to version 1.8 or higher (highly recommended)</li>
+    or
+    <li>Install version 0.4.0 of Karmen Connector</li>
+    </ul>
+    <p>To install version 0.4.0 go to <b>Octoprint Settings</b> -> <b>Plugin Manager</b> -> <b>+ Get more</b> and to <b>... from URL</b> field enter
+        <code>https://github.com/fragaria/karmen-octoprint-plugin/archive/refs/tags/0.4.0-legacy.zip</code> and click <b>Install</b>
+    </p>
+</div>
+{% endif %}
