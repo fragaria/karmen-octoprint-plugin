@@ -303,7 +303,6 @@ class Connector:
         self.sentry = sentry
 
     def on_message(self, ws, message):
-        # def run(*args):
         try:
             data = ForwarderMessage(message)
         except Exception as e:
@@ -324,8 +323,6 @@ class Connector:
                 logging.error(e)
                 self.sentry.captureException(e)
 
-        # threading.Thread(target=run).start()
-
 
     def on_error(self, ws, error):
         self.logger.error(f"ws error: {error}")
@@ -333,7 +330,7 @@ class Connector:
         self.connected = False
 
     def on_close(self, ws, close_status_code, close_msg):
-        self.logger.warning(f"Closed connection {close_status_code} {close_msg}")
+        self.logger.info(f"Closed connection {close_status_code} {close_msg}")
         self.connected = False
 
     def on_open(self, ws):
@@ -341,7 +338,6 @@ class Connector:
         self.connected = True
 
     def on_timer_tick(self):
-        pass
         if self.connected:
             self.ping_pong.ping(self.disconnect)
         else:
