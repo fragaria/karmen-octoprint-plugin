@@ -298,7 +298,7 @@ class Connector:
         self.logger = logger
         self.path_whitelist = whitelist
         self.request_forwarder = None
-        self.timer = RepeatedTimer(10, self.on_timer_tick)
+        self.timer = RepeatedTimer(30, self.on_timer_tick)
         self.connected = False
         self.sentry = sentry
 
