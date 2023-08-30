@@ -4,7 +4,7 @@ from __future__ import absolute_import
 from octoprint.settings import settings
 import octoprint.plugin
 from octoprint.util.version import is_octoprint_compatible
-from .websocket_proxy import Connector
+from .connector import Connector
 from .utils import SentryWrapper, parse_path_whitelist
 
 class KarmenPlugin(
@@ -95,14 +95,39 @@ class KarmenPlugin(
         }
 
     def on_settings_save(self, data):
+        "update settings and reconnect"
         octoprint.plugin.SettingsPlugin.on_settings_save(self, data)
         self._logger.info("Settings saved")
-        self.sentry.init_context()
-        if self._connector:
-            self._connector.disconnect()
-        self._connector.reconnect()
+        self.ws_proxy_reconnect()
 
-    def ws_proxy_connect(self):
+    def ws_proxy_reconnect(self):
+        "reload settings and reconnect"
+        self._logger.info("🍓 Karmen plugin reconnecting...")
+        if not self._connector:
+            self.ws_get_connector()
+        if self._connector:
+            self._connector.reconnect()
+
+    def ws_get_connector_config(self):
+        "return connector or None if settings are not applicable"
+        self.sentry.init_context()
+        ws_server_url = self._settings.get(["ws_server"])
+        key = self._settings.get(["karmen_key"])
+
+        forward_to_url = f"{self.host}:{self.port}"
+        ws_server_url = f"{ws_server_url}/{key}"
+        if not key:
+            raise ValueError("No Karmen device key provided.")
+        if not self.is_octoprint_compatible:
+            self._logger.warning("Incompatible octoprint.")
+        return {
+            'ws_url': ws_server_url,
+            'base_uri': forward_to_url,
+            'path_whitelist': parse_path_whitelist(self._settings.get(["path_whitelist"])),
+        }
+
+    def ws_get_connector(self):
+        "return connector or None if settings are not applicable"
         ws_server_url = self._settings.get(["ws_server"])
         key = self._settings.get(["karmen_key"])
 
@@ -113,20 +138,14 @@ class KarmenPlugin(
             return
         if not self.is_octoprint_compatible:
             self._logger.warning("Incompatible octoprint.")
-        self._connector = Connector(
-            ws_server_url,
-            forward_to_url,
-            self._logger,
-            parse_path_whitelist(self._settings.get(["path_whitelist"])),
-            self.sentry,
-        )
-        self._connector.connect()
-
-    def ws_proxy_reconnect(self):
-        self._logger.info("🍓 Karmen plugin reconnecting...")
-        if self._connector:
-            self._connector.disconnect()
-        self.ws_proxy_connect()
+        try:
+            connector_config = self.ws_get_connector_config()
+        except ValueError as error:
+            self._logger.error(error)
+            self._connector = None
+        else:
+            self._connector = Connector(self._logger, self.sentry, connector_config)
+        return self._connector
 
     def on_startup(self, host, port):
         self.is_octoprint_compatible = is_octoprint_compatible(">1.8")
@@ -136,10 +155,8 @@ class KarmenPlugin(
 
     def on_after_startup(self):
         self._logger.info("🍓 Karmen plugin is starting...")
-        if self._settings.get(["sentry_opt"]) == "in":
-            self._logger.info("Karmen sentry is ENABLED")
-            self.sentry.init_context()
-        self.ws_proxy_connect()
+        if self.ws_get_connector():
+            self._connector.connect()
 
     def on_shutdown(self):
         self._logger.info("🍓 Karmen plugin shutdown...")
