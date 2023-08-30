@@ -22,6 +22,7 @@ class Config:
 class Connector:
 
     def __init__(self, logger: logging.Logger, sentry, **config):
+        self._timeout = 10
         self.ws = None
         self.ws_thread = None
         self.should_end = False
@@ -31,7 +32,7 @@ class Connector:
         self._reconnection_timer_lock = threading.Lock()
         self.reconnect_delay_sec = 10  # reconnect automatically on disconnection
         self.auto_reconnect = True
-        self._heartbeat_clock = RepeatedTimer(30, self._on_timer_tick)
+        self._heartbeat_clock = RepeatedTimer(self._timeout, self._on_timer_tick)
         self.logger = logger
         self.sentry = sentry
         self.config: Optional[Config] = None
@@ -79,19 +80,21 @@ class Connector:
         self._try_auto_reconnect()
 
     def _try_auto_reconnect(self):
-        print('try reconnect')
         if self.auto_reconnect:
             if self.reconnect_delay_sec:
+                self.logger.info(f"Reconnecting in {self.reconnect_delay_sec} seconds")
                 with self._reconnection_timer_lock:
                     if self._reconnection_timer is None:
                         self._reconnection_timer = Timer(self.reconnect_delay_sec, self.connect)
                         self._reconnection_timer.start()
             else:
+                self.logger.info("Reconnecting")
                 self.connect()
 
     def on_open(self, ws):
         self.logger.info("Opened connection")
         self.connected = True
+        self._heartbeat_clock.start()
 
     def connect(self):
         self.logger.info(f"Connecting to {self.config.ws_url}")
@@ -108,13 +111,15 @@ class Connector:
             on_close=self.on_close,
         )
         self.ws_thread = threading.Thread(
-            target=self.ws.run_forever, kwargs={"skip_utf8_validation": True},
+            target=self.ws.run_forever, kwargs={
+                "skip_utf8_validation": True,
+            },
             daemon=True,
         )
         self.ws_thread.start()
+        self.ws.sock.settimeout(self._timeout)
         self.ping_pong = PingPonger(self.ws, self.logger, self.sentry)
         self.connected = True
-        self._heartbeat_clock.start()
         return self.ws
 
     def _get_websocket(self, *args, **kwargs) -> websocket.WebSocketApp:
@@ -137,7 +142,8 @@ class Connector:
             return
         self.logger.info("Disconnecting...")
         self.ws.close()
-        self._heartbeat_clock.stop()
+        if self._heartbeat_clock.is_running:
+            self._heartbeat_clock.stop()
 
     def _validate_config(self, config):
         "set new config during init and before reconnection"
@@ -199,7 +205,7 @@ class PingPonger:
                 self.logger.warning("closing connection")
                 return
             except Exception as e:
-                self.logger.error("Unable to reconnect", e)
+                self.logger.error("Unable to reconnect %s", e)
                 self.sentry.captureException(e)
         else:
             self.logger.debug("Going to ping")
