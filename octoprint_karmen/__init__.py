@@ -144,7 +144,7 @@ class KarmenPlugin(
             self._logger.error(error)
             self._connector = None
         else:
-            self._connector = Connector(self._logger, self.sentry, connector_config)
+            self._connector = Connector(self._logger, self.sentry, **connector_config)
         return self._connector
 
     def on_startup(self, host, port):

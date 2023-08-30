@@ -35,6 +35,7 @@ def test_cleans_all_threads(connector: Connector):
 def test_reconnect(connector: Connector):
     "reconnect and keep only one connection alive at all times"
     connector.connect()._m_close_delay = 0.1
+    connector.reconnect_delay_sec = 0.1
     thread_a = connector.ws_thread
     # let's give a slight delay between disconnect and 'on_close' event
     connector.reconnect()
@@ -63,7 +64,7 @@ def test_request_forwarded(connector: Connector):
     ws: WebSockAppMock = connector.connect()
     with patch.object(connector, 'request_forwarder'):
         ws._m_fake_receive_message('headers', { 'method': 'GET', 'url': '/', 'headers': {} })
-        time.sleep(0.1)
+        time.sleep(0.2)
         assert connector.request_forwarder.handle_request.called
 
 

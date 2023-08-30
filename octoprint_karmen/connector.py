@@ -8,6 +8,7 @@ import io
 import websocket
 from .request_forwarder import RequestForwarder, ForwarderMessage, MessageType, BufferMessage
 
+
 @dataclass
 class Config:
     "config for Connector"
@@ -19,13 +20,17 @@ class Config:
     "Tuple of possible path beginnings"
 
 class Connector:
+
     def __init__(self, logger: logging.Logger, sentry, **config):
         self.ws = None
         self.ws_thread = None
         self.should_end = False
         self.request_forwarder = None
         self.connected = False
-        self.reconnect_automaticaly = True  # reconnect automatically on disconnection
+        self._reconnection_timer: Optional[Timer] = None  # reconnection timer (None if reconnection is not scheduled)
+        self._reconnection_timer_lock = threading.Lock()
+        self.reconnect_delay_sec = 10  # reconnect automatically on disconnection
+        self.auto_reconnect = True
         self._heartbeat_clock = RepeatedTimer(30, self._on_timer_tick)
         self.logger = logger
         self.sentry = sentry
@@ -61,13 +66,28 @@ class Connector:
     def on_error(self, ws, error):
         self.logger.error(f"ws error: {error}")
         self.sentry.captureException(error)
+        if self._heartbeat_clock.is_running:
+            self._heartbeat_clock.stop()
         self.connected = False
+        self._try_auto_reconnect()
 
     def on_close(self, ws, close_status_code, close_msg):
-        self.logger.info(f"Closed connection {close_status_code} {close_msg}")
+        self.logger.info(f"Connection closed {close_status_code} {close_msg}")
         self.connected = False
-        if self.reconnect_automaticaly:
-            self.connect()
+        if self._heartbeat_clock.is_running:
+            self._heartbeat_clock.stop()
+        self._try_auto_reconnect()
+
+    def _try_auto_reconnect(self):
+        print('try reconnect')
+        if self.auto_reconnect:
+            if self.reconnect_delay_sec:
+                with self._reconnection_timer_lock:
+                    if self._reconnection_timer is None:
+                        self._reconnection_timer = Timer(self.reconnect_delay_sec, self.connect)
+                        self._reconnection_timer.start()
+            else:
+                self.connect()
 
     def on_open(self, ws):
         self.logger.info("Opened connection")
@@ -75,6 +95,10 @@ class Connector:
 
     def connect(self):
         self.logger.info(f"Connecting to {self.config.ws_url}")
+        with self._reconnection_timer_lock:
+            if self._reconnection_timer:
+                self._reconnection_timer.cancel()
+                self._reconnection_timer = None
         self.request_forwarder = RequestForwarder(self.config.base_uri, self.ws, self.logger, self.config.path_whitelist, self.sentry)
         self.ws = self._get_websocket(
             self.config.ws_url,
@@ -99,12 +123,12 @@ class Connector:
 
     def reconnect(self):
         self.logger.info("Reconnect...")
-        self.reconnect_automaticaly = True
+        self.auto_reconnect = True
         if self.connected:
             self._disconnect()
 
     def disconnect(self):
-        self.reconnect_automaticaly = False
+        self.auto_reconnect = False
         self._disconnect()
 
     def _disconnect(self):
@@ -122,7 +146,6 @@ class Connector:
                 f"path_whitelist has to be a tuple (got {type(config['path_whitelist'])})"
 
     def _on_timer_tick(self):
-        print('tick')
         if self.connected:
             self.ping_pong.ping(self.reconnect)
 
@@ -141,8 +164,11 @@ class RepeatedTimer(object):
         self.start()
         self.tick_callback(*self.args, **self.kwargs)
 
+    @property
+    def is_running(self):
+        return self._timer_thread
+
     def start(self):
-        print('starting heartbeat')
         self._timer_thread = Timer(self.interval, self._run)
         self._timer_thread.daemon = True
         self._timer_thread.start()
