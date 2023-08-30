@@ -1,17 +1,16 @@
+from functools import cached_property
 import http
-from tarfile import RECORDSIZE
 import websocket
 import json
 import threading
+from threading import Timer
 import time
 import logging
 from enum import Enum
 from urllib.parse import urljoin, urlparse
 import io
-import sched, time
 from .buffer_struct import Struct, BytesField, UIntField
 from octoprint.settings import settings
-from werkzeug.utils import cached_property
 
 logging.basicConfig(level=logging.DEBUG)
 
@@ -71,7 +70,6 @@ class RequestForwarder:
             del self._channels[channel.id]
 
 
-from threading import Timer
 
 class RepeatedTimer(object):
     def __init__(self, interval, function, *args, **kwargs):
@@ -158,9 +156,10 @@ class Channel:
                 self.event_handlers[event](message)
             else:
                 self.logger.warning("Unknown event:", event)
+                self.handle_error(400, "Unknown event {event}")
         except Exception as e:
-            self.logger.debug(e)
-            self.handle_error()
+            self.logger.warning(e)
+            self.handle_error(500, e)
 
 
     @cached_property
@@ -197,18 +196,18 @@ class Channel:
                 else:
                     self.logger.warning(f"Only allowed port is snapshot port {port}")
                     self.handle_error()
-                    return 
+                    return
             else:
-                self.logger.warning(f"Access to non default port is allowed for snapshot url only")
+                self.logger.warning("Access to non default port is allowed for snapshot url only")
                 self.handle_error()
                 return
         elif self.req_params["url"] == '/karmen-pill-info/get':
-            self.send("headers", {                    
+            self.send("headers", {
                     "statusCode": 200,
                     "statusMessage": "OK",
                     "headers": [("Content-type","application/json")],
                     })
-            self.send("data", json.dumps({"system":{"karmen_versin": f"plugin"}}).encode())
+            self.send("data", json.dumps({"system":{"karmen_versin": "plugin"}}).encode())
             self.send("end")
             return
         else:
@@ -216,7 +215,7 @@ class Channel:
             if not self.req_params["url"].startswith(tuple(self.path_whitelist)):
                 self.logger.warning(f"Access to non-whitelisted url is not allowed {self.req_params['url']}")
                 self.handle_error()
-                return 
+                return
             self.connection = http.client.HTTPConnection(self.handler.base_uri)
         self.connection.connect()
 
@@ -252,7 +251,7 @@ class Channel:
             self.send("data", body)
             self.connection.close()
         self.send("end")
-        
+
 
     def handle_error(self, status=400, msg="Invalid request"):
         self.send(
@@ -263,9 +262,9 @@ class Channel:
             },
         )
         self.send("end")
-        if self.connection: 
+        if self.connection:
             self.connection.close()
-        
+
 
     def send(self, event, data=None):
         data_type = MessageType.BUFFER
@@ -289,14 +288,27 @@ class Channel:
 
 
 class Connector:
-    def __init__(self, ws_url, base_uri, logger, whitelist, sentry):
+    def __init__(self, ws_url, base_uri, logger, path_whitelist, sentry):
+        """
+        Parameters
+        ----------
+        ws_url : str
+            url to websocket-proxy server
+        base_uri : str
+            url to forward requests to
+        logger : logging.Logger
+            Python logger compatible OctoprintLogger
+        path_whitelist : tuple
+            Tuple of possible path beginnings.
+        """
+        assert isinstance(path_whitelist, tuple), f"path_whitelist has to be a tuple (got {type(path_whitelist)})"
         self.ws_url = ws_url
         self.ws = None
         self.ws_thread = None
         self.should_end = False
         self.base_uri = base_uri
         self.logger = logger
-        self.path_whitelist = whitelist
+        self.path_whitelist = path_whitelist
         self.request_forwarder = None
         self.timer = RepeatedTimer(30, self.on_timer_tick)
         self.connected = False
@@ -334,7 +346,7 @@ class Connector:
         self.connected = False
 
     def on_open(self, ws):
-        self.logger.info("Opened connection")        
+        self.logger.info("Opened connection")
         self.connected = True
 
     def on_timer_tick(self):
@@ -346,7 +358,7 @@ class Connector:
     def connect(self, sleep=0):
         time.sleep(sleep)
         self.logger.info(f"Connecting to {self.ws_url}")
-        self.ws = websocket.WebSocketApp(
+        self.ws = self._get_websocket(
             self.ws_url,
             on_message=self.on_message,
             on_error=self.on_error,
@@ -360,12 +372,17 @@ class Connector:
         )
         self.ws_thread.daemon = True
         self.ws_thread.start()
+        return self.ws
+
+    def _get_websocket(self, *args, **kwargs) -> websocket.WebSocketApp:
+        "test injection point"
+        return websocket.WebSocketApp(*args, **kwargs)
 
     def reconnect(self):
         self.logger.info("Reconnect...")
         if self.connected:
             self.disconnect()
-        self.connect(sleep=1)
+        return self.connect(sleep=1)
 
     def disconnect(self):
         self.logger.info("Disconnecting...")

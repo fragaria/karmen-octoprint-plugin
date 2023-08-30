@@ -3,7 +3,7 @@ Binary packager compatible with javaScript websocket_proxy buffer-struct
 module.
 """
 
-from werkzeug.utils import cached_property
+from functools import cached_property
 from collections import namedtuple
 from abc import (
     abstractmethod,
