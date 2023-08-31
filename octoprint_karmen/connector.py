@@ -31,7 +31,7 @@ class Config:
 class Connector:
 
     def __init__(self, logger: logging.Logger, sentry, **config):
-        self._timeout = 10
+        self._timeout = 3
         self.reconnect_delay_sec = 3  # reconnect automatically on disconnection
         self.ws = None
         self.ws_thread = None
