@@ -6,23 +6,33 @@ from dataclasses import dataclass
 from threading import Timer
 import io
 import websocket
-from .request_forwarder import RequestForwarder, ForwarderMessage, MessageType, BufferMessage
+from .request_forwarder import (
+    RequestForwarder,
+    ForwarderMessage,
+    MessageType,
+    BufferMessage
+)
 
 
 @dataclass
 class Config:
     "config for Connector"
+
     ws_url: str
     "url to websocket-proxy server"
+
     base_uri: str
     "url to forward requests to"
+
     path_whitelist: tuple
     "Tuple of possible path beginnings"
+
 
 class Connector:
 
     def __init__(self, logger: logging.Logger, sentry, **config):
         self._timeout = 10
+        self.reconnect_delay_sec = 3  # reconnect automatically on disconnection
         self.ws = None
         self.ws_thread = None
         self.should_end = False
@@ -30,7 +40,6 @@ class Connector:
         self.connected = False
         self._reconnection_timer: Optional[Timer] = None  # reconnection timer (None if reconnection is not scheduled)
         self._reconnection_timer_lock = threading.Lock()
-        self.reconnect_delay_sec = 10  # reconnect automatically on disconnection
         self.auto_reconnect = True
         self._heartbeat_clock = RepeatedTimer(self._timeout, self._on_timer_tick)
         self.logger = logger
@@ -39,10 +48,15 @@ class Connector:
         self.set_config(config)
 
     def set_config(self, config):
+        """set / update config
+
+        It is necessary to reconnect in order the config changes to take effect
+        """
         self._validate_config(config)
         self.config = Config(**config)
 
     def on_message(self, ws, message):
+        "process message"
         try:
             data = ForwarderMessage(message)
         except Exception as e:
@@ -65,15 +79,15 @@ class Connector:
 
 
     def on_error(self, ws, error):
+        """process error event from underlaying websocket
+
+        The on_close is called just after on_error
+        """
         self.logger.error(f"ws error: {error}")
         self.sentry.captureException(error)
-        if self._heartbeat_clock.is_running:
-            self._heartbeat_clock.stop()
-        self.connected = False
-        self._try_auto_reconnect()
 
     def on_close(self, ws, close_status_code, close_msg):
-        self.logger.info(f"Connection closed {close_status_code} {close_msg}")
+        self.logger.info(f"Connection closed {close_status_code or 'no status code'} {close_msg or 'no message'}")
         self.connected = False
         if self._heartbeat_clock.is_running:
             self._heartbeat_clock.stop()
@@ -92,7 +106,7 @@ class Connector:
                 self.connect()
 
     def on_open(self, ws):
-        self.logger.info("Opened connection")
+        self.logger.info("Connected")
         self.connected = True
         self._heartbeat_clock.start()
 

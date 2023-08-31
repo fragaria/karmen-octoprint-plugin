@@ -3,6 +3,7 @@ import json
 import logging
 from typing import List
 from collections import namedtuple
+from unittest.mock import MagicMock
 import time
 
 import websocket
@@ -48,10 +49,12 @@ class WebSockAppMock(websocket.WebSocketApp):
         self._m_fake_event('_m__close', 200, 'Connection closed', self._m_close_delay)
 
     def run_forever(self, *args, **kwargs):
-        self._m_run = True
-        self._m_is_running = True
-        logger.debug('starting')
         try:
+            self._m_run = True
+            self._m_is_running = True
+            self.sock = MagicMock()  # set emulated mock
+            self._m_fake_event('open')
+            logger.debug('starting')
             while True:
                 logger.debug('>')
                 while self._m_received:
@@ -70,6 +73,7 @@ class WebSockAppMock(websocket.WebSocketApp):
                 print(''.join(traceback.format_exception(error)))
                 self._m_errors.insert(0, error)
                 self.on_error(self, error)
+                self.on_close(self)
             except Exception as err:
                 self._m_errors.insert(0, err)
                 print(f'\nException from on_error: {err}')
