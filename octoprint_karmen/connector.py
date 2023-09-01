@@ -41,7 +41,7 @@ class Connector:
         self._reconnection_timer: Optional[Timer] = None  # reconnection timer (None if reconnection is not scheduled)
         self._reconnection_timer_lock = threading.Lock()
         self.auto_reconnect = True
-        self._heartbeat_clock = RepeatedTimer(self._timeout, self._on_timer_tick)
+        self._heartbeat_clock = RepeatedTimer(self._timeout*3, logger, self._on_timer_tick)
         self.logger = logger
         self.sentry = sentry
         self.config: Optional[Config] = None
@@ -83,7 +83,7 @@ class Connector:
 
         The on_close is called just after on_error
         """
-        self.logger.error(f"ws error: {error}")
+        self.logger.exception(error)
         self.sentry.captureException(error)
 
     def on_close(self, ws, close_status_code, close_msg):
@@ -124,12 +124,14 @@ class Connector:
             on_close=self.on_close,
         )
         self.request_forwarder = RequestForwarder(self.config.base_uri, self.ws, self.logger, self.config.path_whitelist, self.sentry)
+        self.logger.debug('Creating new instance of websocket thread.')
         self.ws_thread = threading.Thread(
             target=self.ws.run_forever, kwargs={
                 "skip_utf8_validation": True,
             },
             daemon=True,
         )
+        self.logger.debug('Starting websocket thread.')
         self.ws_thread.start()
         self.ws.sock.settimeout(self._timeout)
         self.ping_pong = PingPonger(self.ws, self.logger, self.sentry)
@@ -141,7 +143,7 @@ class Connector:
         return websocket.WebSocketApp(*args, **kwargs)
 
     def reconnect(self):
-        self.logger.info("Reconnect...")
+        self.logger.info("Reconnecting")
         self.auto_reconnect = True
         if self.connected:
             self._disconnect()
@@ -154,8 +156,12 @@ class Connector:
         if not self.connected:
             self.logger.warning("Requested while not still connected.")
             return
-        self.logger.info("Disconnecting...")
-        self.ws.close()
+        def close():
+            self.logger.info("Disconnecting")
+            self.ws.close()
+        threading.Thread(target=close).start()
+
+        self.logger.debug('Stopping heartbeat clock.')
         if self._heartbeat_clock.is_running:
             self._heartbeat_clock.stop()
 
@@ -173,7 +179,7 @@ class Connector:
 class RepeatedTimer(object):
     "run @function each @interval seconds in a separate thread"
 
-    def __init__(self, interval, tick_callback: callable, *args, **kwargs):
+    def __init__(self, interval, logger: logging.Logger, tick_callback: callable, *args, **kwargs):
         self._timer_thread = None
         self.tick_callback = tick_callback  # tick callback
         self.interval = interval
@@ -182,7 +188,10 @@ class RepeatedTimer(object):
 
     def _run(self):
         self.start()
-        self.tick_callback(*self.args, **self.kwargs)
+        try:
+            self.tick_callback(*self.args, **self.kwargs)
+        except Exception as error:
+            self.logger.exception(error)
 
     @property
     def is_running(self):
@@ -215,8 +224,8 @@ class PingPonger:
             self.logger.warning("No pong response received")
             self.sentry.captureMessage("No pong received")
             try:
-                on_close()
                 self.logger.warning("closing connection")
+                on_close()
                 return
             except Exception as e:
                 self.logger.error("Unable to reconnect %s", e)
