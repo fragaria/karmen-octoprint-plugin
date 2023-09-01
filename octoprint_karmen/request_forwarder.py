@@ -88,8 +88,7 @@ class Channel:
                 self.logger.warning("Unknown event:", event)
                 self.handle_error(400, "Unknown event {event}")
         except Exception as e:
-            self.logger.warning(e)
-            self.handle_error(500, e)
+            self.logger.exception(e)
 
 
     @cached_property
@@ -99,7 +98,7 @@ class Channel:
 
     @cached_property
     def path_whitelist(self):
-        return list(filter(None, self.handler.path_whitelist.split(";")))
+        return list(filter(None, self.handler.path_whitelist))
 
     def handle_headers(self, message):
         ireq = message.data

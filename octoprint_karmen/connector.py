@@ -116,7 +116,6 @@ class Connector:
             if self._reconnection_timer:
                 self._reconnection_timer.cancel()
                 self._reconnection_timer = None
-        self.request_forwarder = RequestForwarder(self.config.base_uri, self.ws, self.logger, self.config.path_whitelist, self.sentry)
         self.ws = self._get_websocket(
             self.config.ws_url,
             on_open=self.on_open,
@@ -124,6 +123,7 @@ class Connector:
             on_error=self.on_error,
             on_close=self.on_close,
         )
+        self.request_forwarder = RequestForwarder(self.config.base_uri, self.ws, self.logger, self.config.path_whitelist, self.sentry)
         self.ws_thread = threading.Thread(
             target=self.ws.run_forever, kwargs={
                 "skip_utf8_validation": True,
