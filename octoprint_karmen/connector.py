@@ -46,6 +46,11 @@ class Connector:
         self.sentry = sentry
         self.config: Optional[Config] = None
         self.set_config(config)
+        self._on_close_watchdog = OnCloseTimer(
+            self._timeout*1,
+            lambda :self.on_close(self, None, 'Watchdog!'),
+            logger
+        )
 
     def set_config(self, config):
         """set / update config
@@ -86,8 +91,10 @@ class Connector:
         self.logger.exception(error)
         self.sentry.captureException(error)
 
-    def on_close(self, ws, close_status_code, close_msg):
+    def on_close(self, ws, close_status_code=None, close_msg=None):
         self.logger.info(f"Connection closed {close_status_code or 'no status code'} {close_msg or 'no message'}")
+        if not self._on_close_watchdog.cancel():
+            self.logger.debug("on_close watchdog not running, event called from it most probably.")
         self.connected = False
         if self._heartbeat_clock.is_running:
             self._heartbeat_clock.stop()
@@ -156,10 +163,10 @@ class Connector:
         if not self.connected:
             self.logger.warning("Requested while not still connected.")
             return
-        def close():
-            self.logger.info("Disconnecting")
-            self.ws.close()
-        threading.Thread(target=close).start()
+        self.logger.info("Disconnecting")
+        self.ws.close()
+        if self.auto_reconnect:
+            self._on_close_watchdog.start()
 
         self.logger.debug('Stopping heartbeat clock.')
         if self._heartbeat_clock.is_running:
@@ -246,3 +253,47 @@ class PingPonger:
             self.gotPong = False
 
 
+class OnCloseTimer:
+    """Implement threading timer with threading lock
+
+    I haven't used bare Timer becuse I wanted to move thread-safe agenda around
+    it to a separate piece of code.
+    """
+
+    def __init__(self, timeout_secs, on_close, logger):
+        self._timer = None
+        self._timeout_secs = timeout_secs
+        self._on_close = on_close
+        self.lock = threading.Lock()
+        self._logger = logger
+
+    def start(self):
+        with self.lock:
+            assert self._timer is None
+            self._timer = Timer(
+                self._timeout_secs, self._alarm
+            )
+            self._timer.start()
+
+    def cancel(self):
+        with self.lock:
+            if self.running:
+                self._logger.debug("Cancelling on_close timer.")
+                self._timer.cancel()
+                return True
+            else:
+                self._logger.debug("on_close timer not running (was it triggered?).")
+                return False
+
+    @property
+    def running(self):
+        return self._timer is not None and self._timer.is_alive()
+
+    def _alarm(self):
+        with self.lock:
+            self._timer = None
+        try:
+            self._logger.warning("on_close not called on time, watchdog acts.")
+            self._on_close()
+        except Exception as error:
+            self._logger.exception(error)

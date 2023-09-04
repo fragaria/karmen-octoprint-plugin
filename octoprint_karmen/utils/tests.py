@@ -57,13 +57,13 @@ class WebSockAppMock(websocket.WebSocketApp):
             logger.debug('starting')
             while True:
                 logger.debug('>')
-                while self._m_received:
+                while len(self._m_received):
                     event = self._m_received.pop()
                     if event.name.startswith('_m_'):  # run ws app method from within loop
                         getattr(self, event.name[3:])(*event.args, **event.kwargs)
                     elif hasattr(self, f'on_{event.name}'):  # pretend an event
                         getattr(self, f'on_{event.name}')(self, *event.args, **event.kwargs)
-                time.sleep(0.1)
+                time.sleep(0.01)
                 if not self._m_run:
                     logger.debug('#')
                     break

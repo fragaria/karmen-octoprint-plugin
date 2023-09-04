@@ -34,8 +34,8 @@ def test_cleans_all_threads(connector: Connector):
 
 def test_reconnect(connector: Connector):
     "reconnect and keep only one connection alive at all times"
-    connector.connect()._m_close_delay = 0.1
-    connector.reconnect_delay_sec = 0.1
+    connector.connect()._m_close_delay = 0.01
+    connector.reconnect_delay_sec = 0.01
     thread_a = connector.ws_thread
     # let's give a slight delay between disconnect and 'on_close' event
     connector.reconnect()
@@ -51,10 +51,10 @@ def test_reconnect(connector: Connector):
 
 def test_ping_pong_reconnects(connector: Connector):
     "running without ping-pong response triggers recconnect"
-    connector._heartbeat_clock = RepeatedTimer(0.1, connector._on_timer_tick)
+    connector._heartbeat_clock = RepeatedTimer(0.01, logger, connector._on_timer_tick)
     connector.connect()
     with patch.object(connector, '_disconnect'):
-        time.sleep(0.3)
+        time.sleep(0.03)
         assert connector._disconnect.called
     connector.disconnect()
 
@@ -64,8 +64,19 @@ def test_request_forwarded(connector: Connector):
     ws: WebSockAppMock = connector.connect()
     with patch.object(connector, 'request_forwarder'):
         ws._m_fake_receive_message('headers', { 'method': 'GET', 'url': '/', 'headers': {} })
-        time.sleep(0.2)
+        time.sleep(0.02)
         assert connector.request_forwarder.handle_request.called
+
+def test_on_close_watchdog(connector: Connector):
+    connector._on_close_watchdog._timeout_secs = 0.01 # start imediately
+    ws: WebSockAppMock = connector.connect()
+    ws._m_close_delay = 0.03
+    connector._disconnect()
+    assert connector._on_close_watchdog.running
+    with patch.object(connector, 'on_close') as on_close:
+        time.sleep(0.02)
+        assert on_close.called
+    connector.disconnect()
 
 
 # ---- FIXTURES ----
