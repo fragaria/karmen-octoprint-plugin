@@ -105,6 +105,8 @@ class KarmenPlugin(
         self._logger.info("🍓 Karmen plugin reconnecting...")
         if not self._connector:
             self.ws_get_connector()
+        else:
+            self._connector.set_config(self.ws_get_connector_config())
         if self._connector:
             self._connector.reconnect()
 
