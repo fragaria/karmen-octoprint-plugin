@@ -83,9 +83,9 @@ class Connector(metaclass=Singleton):
         self.logger.debug('Setting state to %s', self.state)
         self.state_condition.notify()
 
-    def wait_for_state(self, *states):
+    def wait_for_state(self, *states, timeout=0.1):
         self.logger.debug("... waiting for %s state(s) (current: %s)", states, self.state)
-        self.state_condition.wait_for(lambda: self.state in states, self._timeout)
+        self.state_condition.wait_for(lambda: self.state in states, timeout=timeout)
         if self.state not in states:
             raise InvalidStateException(f"Timeout waiting for {states!r} state(s) (currently '{self.state}'.")
 
@@ -101,56 +101,6 @@ class Connector(metaclass=Singleton):
         self._validate_config(config)
         self.config = Config(**config)
 
-    def on_message(self, ws, message):
-        "process message"
-        try:
-            data = ForwarderMessage(message)
-        except Exception as e:
-            logging.warning(e)
-            self.sentry.captureException(e)
-            return
-        if data.channel == 'ping-pong':
-            try:
-                self.ping_pong.handle_request(data)
-            except Exception as e:
-                logging.warning(e)
-                self.sentry.captureException(e)
-                return
-        else:
-            try:
-                self.request_forwarder.handle_request(data)
-            except Exception as e:
-                logging.error(e)
-                self.sentry.captureException(e)
-
-
-    def on_error(self, ws, error):
-        """process error event from underlaying websocket
-
-        The on_close is called just after on_error
-        """
-        self.logger.exception(error)
-        self.sentry.captureException(error)
-
-    def on_close(self, ws, close_status_code=None, close_msg=None):
-        self.logger.debug(f'waiting for "disconnecting" state (current state: {self.state})')
-        with self.state_condition:
-            self.wait_for_state(DISCONNECTING)
-            self.logger.info(f"Connection closed {close_status_code or 'no status code'} {close_msg or 'no message'}")
-            # TODO: is this still necessary after state_condition was implemented
-            if not self._on_close_watchdog.cancel():
-                self.logger.debug("on_close watchdog not running")
-            if close_status_code == -1 and close_msg == 'Watchdog!':
-                # called from watchdog
-                if self.ws:
-                    self.ws.close()
-            if self._heartbeat_clock.is_running:
-                self._heartbeat_clock.stop()
-            self.logger.debug('... clearing ws_thread %r', self.ws_thread)
-            self.ws_thread = None
-            self.set_state(DISCONNECTED)
-        self._try_auto_reconnect()
-
     def _try_auto_reconnect(self):
         if self._auto_reconnect:
             if self.config.reconnect_delay_sec:
@@ -162,13 +112,6 @@ class Connector(metaclass=Singleton):
             else:
                 self.logger.info("Reconnecting")
                 self.connect()
-
-    def on_open(self, ws):
-        with self.state_condition:
-            self.wait_for_state(CONNECTING)
-            self.logger.info("Connected")
-            self._heartbeat_clock.start()
-            self.set_state(CONNECTED)
 
     def connect(self):
         self._auto_reconnect = self.config.auto_reconnect
@@ -200,6 +143,10 @@ class Connector(metaclass=Singleton):
             self.ws_thread.start()
             self.ws.sock.settimeout(self._timeout)
             self.ping_pong = PingPonger(self.ws, self.logger, self.sentry)
+            try:
+                self.wait_for_state(CONNECTED, timeout=1)
+            except InvalidStateException:
+                pass
             return self.ws
 
     def _get_websocket(self, *args, **kwargs) -> websocket.WebSocketApp:
@@ -238,8 +185,76 @@ class Connector(metaclass=Singleton):
         if self.connected:
             self.ping_pong.ping(self.reconnect)
 
+    def on_message(self, ws, message):
+        "process message"
+        try:
+            data = ForwarderMessage(message)
+        except Exception as e:
+            logging.warning(e)
+            self.sentry.captureException(e)
+            return
+        if data.channel == 'ping-pong':
+            try:
+                self.ping_pong.handle_request(data)
+            except Exception as e:
+                logging.warning(e)
+                self.sentry.captureException(e)
+                return
+        else:
+            try:
+                self.request_forwarder.handle_request(data)
+            except Exception as e:
+                logging.error(e)
+                self.sentry.captureException(e)
 
-class RepeatedTimer(object):
+
+    def on_error(self, ws, error):
+        """process error event from underlaying websocket
+
+        The on_close is called just after on_error
+        """
+        self.logger.debug('on_error called')
+        self.logger.exception(error)
+        self.sentry.captureException(error)
+        with self.state_condition:
+            self.set_state(DISCONNECTING)
+
+    def on_close(self, ws, close_status_code=None, close_msg=None):
+        self.logger.debug('on_close called')
+        if ws != self.ws:
+            self.logger.warning(f"`on_close` called from an old websocket")
+        self.logger.debug(f'waiting for "disconnecting" state (current state: {self.state})')
+        with self.state_condition:
+            self.wait_for_state(CONNECTED, DISCONNECTING)
+            self.logger.info(f"Connection closed {close_status_code or 'no status code'} {close_msg or 'no message'}")
+            # TODO: is this still necessary after state_condition was implemented
+            if not self._on_close_watchdog.cancel():
+                self.logger.debug("on_close watchdog not running")
+            if close_status_code == -1 and close_msg == 'Watchdog!':
+                # called from watchdog
+                if self.ws:
+                    self.ws.close()
+                    self.ws.on_close = None
+            self._heartbeat_clock.stop()
+            self.logger.debug('... clearing ws_thread %r', self.ws_thread)
+            self.ws_thread = None
+            self.set_state(DISCONNECTED)
+        self._try_auto_reconnect()
+
+    def on_open(self, ws):
+        self.logger.debug(f"On_open with thred {self.ws_thread}")
+        with self.state_condition:
+            try:
+                self.wait_for_state(CONNECTING)
+                self.logger.info("Connected")
+                self._heartbeat_clock.start()
+                self.set_state(CONNECTED)
+            except InvalidStateException:  # not in connecting state
+                self.logger.warning(f"on_open received while in {self.state} state (expecting {CONNECTING}).")
+
+
+
+class RepeatedTimer:
     "run @function each @interval seconds in a separate thread"
 
     def __init__(self, interval, logger: logging.Logger, tick_callback: callable, *args, **kwargs):
@@ -248,6 +263,7 @@ class RepeatedTimer(object):
         self.interval = interval
         self.args = args
         self.kwargs = kwargs
+        self.logger = logger
 
     def _run(self):
         self.start()
@@ -266,8 +282,9 @@ class RepeatedTimer(object):
         self._timer_thread.start()
 
     def stop(self):
-        self._timer_thread.cancel()
-        self._timer_thread = None
+        if self.is_running:
+            self._timer_thread.cancel()
+            self._timer_thread = None
 
 
 class PingPonger:
@@ -305,7 +322,12 @@ class PingPonger:
 
             BufferMessage.pack(msg, buf)
             buf.seek(0)
-            self.ws.send(buf.read(), websocket.ABNF.OPCODE_BINARY)
+            try:
+                self.ws.send(buf.read(), websocket.ABNF.OPCODE_BINARY)
+            except websocket.WebSocketException as error:
+                self.logger.info(f"Websocket exception {error} during ping. Closing connection.")
+                on_close()
+
             self.gotPong = False
 
 

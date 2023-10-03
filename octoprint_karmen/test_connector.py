@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 import time
 
 
-from octoprint_karmen.connector import Connector, RepeatedTimer, InvalidStateException, DISCONNECTED
+from octoprint_karmen.connector import Connector, Config, RepeatedTimer, InvalidStateException, DISCONNECTED
 from octoprint_karmen.utils.tests import WebSockAppMock, wait_until
 
 logger = logging.getLogger(__name__)
@@ -32,7 +32,7 @@ def test_cleans_all_threads(connector: Connector):
     ws_thread = connector.ws_thread
     connector.disconnect()
     wait_until(lambda :not ws_thread.is_alive())
-    assert not ws_thread.is_alive()
+    assert not ws_thread.is_alive(), f"Thread {ws_thread} is still alive."
 
 
 def test_reconnect(connector: Connector):
@@ -56,12 +56,12 @@ def test_reconnect(connector: Connector):
 
 def test_ping_pong_reconnects(connector: Connector):
     "running without ping-pong response triggers recconnect"
-    connector._heartbeat_clock = RepeatedTimer(0.01, logger, connector._on_timer_tick)
-    connector.connect()
-    with patch.object(connector, '_disconnect'):
-        time.sleep(0.03)
-        assert connector._disconnect.called
-    connector.disconnect()
+    with patch.object(connector, '_heartbeat_clock', RepeatedTimer(0.01, logger, connector._on_timer_tick)):
+        connector.connect()
+        with patch.object(connector, '_disconnect'):
+            time.sleep(0.03)
+            assert connector._disconnect.called
+        connector.disconnect()
 
 
 def test_request_forwarded(connector: Connector):
@@ -94,11 +94,12 @@ def test_no_connect_before_on_close(connector: Connector):
     connector.disconnect()
     with patch.object(connector, 'on_close') as on_close:
         with pytest.raises(InvalidStateException):
+            d('e')
             connector._timeout = 0.1
             connector.connect()
             connector._timeout = 3
             assert not on_close.called
-    wait_until(lambda :on_close.called)
+    wait_until(lambda :on_close.called, timeout=0.5)
     connector.connect()
     connector.disconnect()
 
@@ -111,16 +112,24 @@ def connector():
     def get_websocket(*args, **kwargs):
         return WebSockAppMock(*args, **kwargs)
     with patch.object(Connector, '_get_websocket', new=get_websocket):
+        config = {
+            'ws_url': 'server-url',
+            'base_uri': 'api-url',
+            'path_whitelist': ('/', ),
+            'reconnect_delay_sec': 1,
+            'auto_reconnect': False,
+        }
         connector = Connector(
             logger=logger,
             sentry=MagicMock(),
-            ws_url='server-url',
-            base_uri='api-url',
-            path_whitelist=('/', ),
+            **config
         )
+        connector.set_config(config)
         yield connector
-        connector.disconnect()
-        wait_until(lambda : connector.state == DISCONNECTED)
+        if connector.state != DISCONNECTED:
+            connector.disconnect()
+        wait_until(lambda : connector.state == DISCONNECTED, 10)
+        assert connector.state == DISCONNECTED
 
 
 dictConfig({
@@ -134,7 +143,7 @@ dictConfig({
     # uncomment to display more information on console set:
     'root': {
         'handlers': ['console'],
-        'level': 'INFO',
+        'level': 'DEBUG',
     },
     'loggers': {
         'octoprint_karmen.test_connector': {
