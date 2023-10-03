@@ -28,6 +28,14 @@ class Config:
     path_whitelist: tuple
     "Tuple of possible path beginnings"
 
+    auto_reconnect: bool = True
+    "reconnect upon lost connection (disabled by calling `disconnect()`"
+
+    reconnect_delay_sec: int = 3
+    "reconnection delay if `auto_reconnect` enabled (seconds)"
+
+
+
 
 DISCONNECTED = 'disconnected'
 CONNECTING = 'connecting'
@@ -38,20 +46,21 @@ DISCONNECTING = 'disconnecting'
 class Connector(metaclass=Singleton):
 
     def __init__(self, logger: logging.Logger, sentry, **config):
-        self._state = DISCONNECTED
+        #
+        self.__state = DISCONNECTED
         self._timeout = 3
-        self.reconnect_delay_sec = 3  # reconnect automatically on disconnection
+        # private
         self.ws = None
         self.ws_thread = None
-        self.should_end = False
         self.request_forwarder = None
         self._reconnection_timer: Optional[Timer] = None  # reconnection timer (None if reconnection is not scheduled)
+        # TODO: remove or move to timer
         self._reconnection_timer_lock = threading.Lock()
-        self.auto_reconnect = True
         self._heartbeat_clock = RepeatedTimer(self._timeout*3, logger, self._on_timer_tick)
         self.logger = logger
         self.sentry = sentry
         self.config: Optional[Config] = None
+
         self.set_config(config)
         self._on_close_watchdog = OnCloseTimer(
             self._timeout*1,
@@ -67,16 +76,16 @@ class Connector(metaclass=Singleton):
 
     @property
     def state(self):
-        return self._state
+        return self.__state
 
     def set_state(self, new_state):
-        self._state = new_state
+        self.__state = new_state
         self.logger.debug('Setting state to %s', self.state)
         self.state_condition.notify()
 
     def wait_for_state(self, *states):
         self.logger.debug("... waiting for %s state(s) (current: %s)", states, self.state)
-        self.state_condition.wait_for(lambda: self.state in states, 0.1)
+        self.state_condition.wait_for(lambda: self.state in states, self._timeout)
         if self.state not in states:
             raise InvalidStateException(f"Timeout waiting for {states!r} state(s) (currently '{self.state}'.")
 
@@ -143,12 +152,12 @@ class Connector(metaclass=Singleton):
         self._try_auto_reconnect()
 
     def _try_auto_reconnect(self):
-        if self.auto_reconnect:
-            if self.reconnect_delay_sec:
-                self.logger.info(f"Reconnecting in {self.reconnect_delay_sec} seconds")
+        if self._auto_reconnect:
+            if self.config.reconnect_delay_sec:
+                self.logger.info(f"Reconnecting in {self.config.reconnect_delay_sec} seconds")
                 with self._reconnection_timer_lock:
                     if self._reconnection_timer is None:
-                        self._reconnection_timer = Timer(self.reconnect_delay_sec, self.connect)
+                        self._reconnection_timer = Timer(self.config.reconnect_delay_sec, self.connect)
                         self._reconnection_timer.start()
             else:
                 self.logger.info("Reconnecting")
@@ -162,6 +171,7 @@ class Connector(metaclass=Singleton):
             self.set_state(CONNECTED)
 
     def connect(self):
+        self._auto_reconnect = self.config.auto_reconnect
         self.logger.info(f"Connecting to {self.config.ws_url}")
         with self.state_condition:
             self.wait_for_state(DISCONNECTED)
@@ -198,12 +208,12 @@ class Connector(metaclass=Singleton):
 
     def reconnect(self):
         self.logger.info("Reconnecting")
-        self.auto_reconnect = True
+        self._auto_reconnect = True
         if self.connected:
             self._disconnect()
 
     def disconnect(self):
-        self.auto_reconnect = False
+        self._auto_reconnect = False
         self._disconnect()
 
     def _disconnect(self):
@@ -215,12 +225,8 @@ class Connector(metaclass=Singleton):
             self.logger.debug(f'Closing socket {self.ws}')
             self.ws.close()
             self.set_state(DISCONNECTING)
-            self.logger.debug(f'... starting on_close watchdog')
+            self.logger.debug('... starting on_close watchdog')
             self._on_close_watchdog.start()
-
-            self.logger.debug('Stopping heartbeat clock.')
-            if self._heartbeat_clock.is_running:
-                self._heartbeat_clock.stop()
 
     def _validate_config(self, config):
         "set new config during init and before reconnection"

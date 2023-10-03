@@ -38,7 +38,7 @@ def test_cleans_all_threads(connector: Connector):
 def test_reconnect(connector: Connector):
     "reconnect and keep only one connection alive at all times"
     connector.connect()._m_close_delay = 0.01
-    connector.reconnect_delay_sec = 0.01
+    connector.config.reconnect_delay_sec = 0.01
     thread_a = connector.ws_thread
     # let's give a slight delay between disconnect and 'on_close' event
     time.sleep(0.03)
@@ -78,7 +78,7 @@ def test_on_close_watchdog(connector: Connector):
     ws: WebSockAppMock = connector.connect()
     ws._m_close_delay = 0.03
     connector._disconnect()
-    connector.auto_reconnect = True
+    connector._auto_reconnect = True
     assert connector._on_close_watchdog.running
     with patch.object(connector, 'on_close') as on_close:
         time.sleep(0.02)
@@ -94,10 +94,12 @@ def test_no_connect_before_on_close(connector: Connector):
     connector.disconnect()
     with patch.object(connector, 'on_close') as on_close:
         with pytest.raises(InvalidStateException):
+            connector._timeout = 0.1
             connector.connect()
+            connector._timeout = 3
             assert not on_close.called
-        wait_until(lambda :on_close.called)
-        connector.connect()
+    wait_until(lambda :on_close.called)
+    connector.connect()
     connector.disconnect()
 
 # ---- FIXTURES ----
