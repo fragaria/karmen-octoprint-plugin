@@ -29,16 +29,22 @@ class Config:
     "Tuple of possible path beginnings"
 
 
+DISCONNECTED = 'disconnected'
+CONNECTING = 'connecting'
+CONNECTED = 'connected'
+DISCONNECTING = 'disconnecting'
+
+
 class Connector(metaclass=Singleton):
 
     def __init__(self, logger: logging.Logger, sentry, **config):
+        self._state = DISCONNECTED
         self._timeout = 3
         self.reconnect_delay_sec = 3  # reconnect automatically on disconnection
         self.ws = None
         self.ws_thread = None
         self.should_end = False
         self.request_forwarder = None
-        self.connected = False
         self._reconnection_timer: Optional[Timer] = None  # reconnection timer (None if reconnection is not scheduled)
         self._reconnection_timer_lock = threading.Lock()
         self.auto_reconnect = True
@@ -49,9 +55,34 @@ class Connector(metaclass=Singleton):
         self.set_config(config)
         self._on_close_watchdog = OnCloseTimer(
             self._timeout*1,
-            lambda :self.on_close(self, None, 'Watchdog!'),
+            lambda :self.on_close(self, -1, 'Watchdog!'),
             logger
         )
+
+        # TODO:
+        # Condition to wait for the right state
+        self.state_condition: threading.Condition = threading.Condition()
+        # acquired by on_close and released by connect
+        self.disconnected_lock = threading.Lock()
+
+    @property
+    def state(self):
+        return self._state
+
+    def set_state(self, new_state):
+        self._state = new_state
+        self.logger.debug('Setting state to %s', self.state)
+        self.state_condition.notify()
+
+    def wait_for_state(self, *states):
+        self.logger.debug("... waiting for %s state(s) (current: %s)", states, self.state)
+        self.state_condition.wait_for(lambda: self.state in states, 0.1)
+        if self.state not in states:
+            raise InvalidStateException(f"Timeout waiting for {states!r} state(s) (currently '{self.state}'.")
+
+    @property
+    def connected(self):
+        return self.state in (CONNECTED, DISCONNECTING)
 
     def set_config(self, config):
         """set / update config
@@ -93,12 +124,22 @@ class Connector(metaclass=Singleton):
         self.sentry.captureException(error)
 
     def on_close(self, ws, close_status_code=None, close_msg=None):
-        self.logger.info(f"Connection closed {close_status_code or 'no status code'} {close_msg or 'no message'}")
-        if not self._on_close_watchdog.cancel():
-            self.logger.debug("on_close watchdog not running, event called from it most probably.")
-        self.connected = False
-        if self._heartbeat_clock.is_running:
-            self._heartbeat_clock.stop()
+        self.logger.debug(f'waiting for "disconnecting" state (current state: {self.state})')
+        with self.state_condition:
+            self.wait_for_state(DISCONNECTING)
+            self.logger.info(f"Connection closed {close_status_code or 'no status code'} {close_msg or 'no message'}")
+            # TODO: is this still necessary after state_condition was implemented
+            if not self._on_close_watchdog.cancel():
+                self.logger.debug("on_close watchdog not running")
+            if close_status_code == -1 and close_msg == 'Watchdog!':
+                # called from watchdog
+                if self.ws:
+                    self.ws.close()
+            if self._heartbeat_clock.is_running:
+                self._heartbeat_clock.stop()
+            self.logger.debug('... clearing ws_thread %r', self.ws_thread)
+            self.ws_thread = None
+            self.set_state(DISCONNECTED)
         self._try_auto_reconnect()
 
     def _try_auto_reconnect(self):
@@ -114,37 +155,42 @@ class Connector(metaclass=Singleton):
                 self.connect()
 
     def on_open(self, ws):
-        self.logger.info("Connected")
-        self.connected = True
-        self._heartbeat_clock.start()
+        with self.state_condition:
+            self.wait_for_state(CONNECTING)
+            self.logger.info("Connected")
+            self._heartbeat_clock.start()
+            self.set_state(CONNECTED)
 
     def connect(self):
         self.logger.info(f"Connecting to {self.config.ws_url}")
-        with self._reconnection_timer_lock:
-            if self._reconnection_timer:
-                self._reconnection_timer.cancel()
-                self._reconnection_timer = None
-        self.ws = self._get_websocket(
-            self.config.ws_url,
-            on_open=self.on_open,
-            on_message=self.on_message,
-            on_error=self.on_error,
-            on_close=self.on_close,
-        )
-        self.request_forwarder = RequestForwarder(self.config.base_uri, self.ws, self.logger, self.config.path_whitelist, self.sentry)
-        self.logger.debug('Creating new instance of websocket thread.')
-        self.ws_thread = threading.Thread(
-            target=self.ws.run_forever, kwargs={
-                "skip_utf8_validation": True,
-            },
-            daemon=True,
-        )
-        self.logger.debug('Starting websocket thread.')
-        self.ws_thread.start()
-        self.ws.sock.settimeout(self._timeout)
-        self.ping_pong = PingPonger(self.ws, self.logger, self.sentry)
-        self.connected = True
-        return self.ws
+        with self.state_condition:
+            self.wait_for_state(DISCONNECTED)
+            self.logger.debug("... connecting ...")
+            with self._reconnection_timer_lock:
+                if self._reconnection_timer:
+                    self._reconnection_timer.cancel()
+                    self._reconnection_timer = None
+            self.ws = self._get_websocket(
+                self.config.ws_url,
+                on_open=self.on_open,
+                on_message=self.on_message,
+                on_error=self.on_error,
+                on_close=self.on_close,
+            )
+            self.request_forwarder = RequestForwarder(self.config.base_uri, self.ws, self.logger, self.config.path_whitelist, self.sentry)
+            self.logger.debug('... creating ws thread (was %r).', self.ws_thread)
+            self.ws_thread = threading.Thread(
+                target=self.ws.run_forever, kwargs={
+                    "skip_utf8_validation": True,
+                },
+                daemon=True,
+            )
+            self.logger.debug('... starting websocket thread %r.', self.ws_thread)
+            self.set_state(CONNECTING)
+            self.ws_thread.start()
+            self.ws.sock.settimeout(self._timeout)
+            self.ping_pong = PingPonger(self.ws, self.logger, self.sentry)
+            return self.ws
 
     def _get_websocket(self, *args, **kwargs) -> websocket.WebSocketApp:
         "test injection point"
@@ -161,17 +207,20 @@ class Connector(metaclass=Singleton):
         self._disconnect()
 
     def _disconnect(self):
-        if not self.connected:
-            self.logger.warning("Requested while not still connected.")
-            return
         self.logger.info("Disconnecting")
-        self.ws.close()
-        if self.auto_reconnect:
+        with self.state_condition:
+            if self.state in (DISCONNECTED, DISCONNECTING):
+                self.logger.warning(f'Trying to disconnect while in "{self.state}" state.')
+                return
+            self.logger.debug(f'Closing socket {self.ws}')
+            self.ws.close()
+            self.set_state(DISCONNECTING)
+            self.logger.debug(f'... starting on_close watchdog')
             self._on_close_watchdog.start()
 
-        self.logger.debug('Stopping heartbeat clock.')
-        if self._heartbeat_clock.is_running:
-            self._heartbeat_clock.stop()
+            self.logger.debug('Stopping heartbeat clock.')
+            if self._heartbeat_clock.is_running:
+                self._heartbeat_clock.stop()
 
     def _validate_config(self, config):
         "set new config during init and before reconnection"
@@ -281,9 +330,10 @@ class OnCloseTimer:
             if self.running:
                 self._logger.debug("Cancelling on_close timer.")
                 self._timer.cancel()
+                self._timer = None
                 return True
             else:
-                self._logger.debug("on_close timer not running (was it triggered?).")
+                self._logger.debug("on_close timer not running.")
                 return False
 
     @property
@@ -298,3 +348,6 @@ class OnCloseTimer:
             self._on_close()
         except Exception as error:
             self._logger.exception(error)
+
+class InvalidStateException(TimeoutError):
+    "Indicates invalid state for an operation"
