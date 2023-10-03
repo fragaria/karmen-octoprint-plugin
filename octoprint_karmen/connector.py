@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from threading import Timer
 import io
 import websocket
+from .utils.singleton import Singleton
 from .request_forwarder import (
     RequestForwarder,
     ForwarderMessage,
@@ -28,7 +29,7 @@ class Config:
     "Tuple of possible path beginnings"
 
 
-class Connector:
+class Connector(metaclass=Singleton):
 
     def __init__(self, logger: logging.Logger, sentry, **config):
         self._timeout = 3
