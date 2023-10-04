@@ -65,7 +65,6 @@ class WebSockAppMock(websocket.WebSocketApp):
                         getattr(self, f'on_{event.name}')(self, *event.args, **event.kwargs)
                 time.sleep(0.01)
                 if not self._m_run:
-                    logger.debug('#')
                     break
         except Exception as error:
             try:
@@ -80,7 +79,6 @@ class WebSockAppMock(websocket.WebSocketApp):
                 print(''.join(traceback.format_exception(err)))
             raise
         finally:
-            logger.debug('Quitting')
             self._m_is_running = False
 
 

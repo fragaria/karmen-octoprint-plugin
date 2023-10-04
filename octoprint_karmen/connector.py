@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from threading import Timer
 import io
 import websocket
+import atexit
 from .utils.singleton import Singleton
 from .request_forwarder import (
     RequestForwarder,
@@ -73,6 +74,7 @@ class Connector(metaclass=Singleton):
         self.state_condition: threading.Condition = threading.Condition()
         # acquired by on_close and released by connect
         self.disconnected_lock = threading.Lock()
+        logger.debug(f'Registering on_exit')
 
     @property
     def state(self):
@@ -133,6 +135,7 @@ class Connector(metaclass=Singleton):
             self.request_forwarder = RequestForwarder(self.config.base_uri, self.ws, self.logger, self.config.path_whitelist, self.sentry)
             self.logger.debug('... creating ws thread (was %r).', self.ws_thread)
             self.ws_thread = threading.Thread(
+                name='WS Thread',
                 target=self.ws.run_forever, kwargs={
                     "skip_utf8_validation": True,
                 },
@@ -252,6 +255,20 @@ class Connector(metaclass=Singleton):
             except InvalidStateException:  # not in connecting state
                 self.logger.warning(f"on_open received while in {self.state} state (expecting {CONNECTING}).")
 
+    def on_exit(self):
+        if threading.main_thread().ident != threading.get_ident():
+            # not running in main thread
+            raise RuntimeError("On exit should be run from main thread.")
+        if self.state not in (DISCONNECTED, DISCONNECTING):
+            self.disconnect()
+
+        start_time = time.time()
+        while self.state != DISCONNECTED and time.time() - start_time < 3:
+            time.sleep(0.1)
+        if self.ws_thread:
+            self.ws_thread.join()
+        if self._heartbeat_clock:
+            self._heartbeat_clock.stop()
 
 
 class RepeatedTimer:
@@ -266,11 +283,12 @@ class RepeatedTimer:
         self.logger = logger
 
     def _run(self):
-        self.start()
         try:
             self.tick_callback(*self.args, **self.kwargs)
         except Exception as error:
             self.logger.exception(error)
+        finally:
+            self.start()
 
     @property
     def is_running(self):
@@ -278,12 +296,14 @@ class RepeatedTimer:
 
     def start(self):
         self._timer_thread = Timer(self.interval, self._run)
+        self._timer_thread.name = 'repeated thread'
         self._timer_thread.daemon = True
         self._timer_thread.start()
 
     def stop(self):
         if self.is_running:
             self._timer_thread.cancel()
+            self._timer_thread.join()
             self._timer_thread = None
 
 
@@ -379,3 +399,8 @@ class OnCloseTimer:
 
 class InvalidStateException(TimeoutError):
     "Indicates invalid state for an operation"
+
+def cleanup():
+    connector = Singleton._instances[Connector]
+    connector.on_exit()
+atexit.register(cleanup)

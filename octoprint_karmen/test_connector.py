@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 import time
 
 
-from octoprint_karmen.connector import Connector, Config, RepeatedTimer, InvalidStateException, DISCONNECTED
+from octoprint_karmen.connector import Connector, Config, RepeatedTimer, InvalidStateException, DISCONNECTED, cleanup
 from octoprint_karmen.utils.tests import WebSockAppMock, wait_until
 
 logger = logging.getLogger(__name__)
@@ -94,7 +94,6 @@ def test_no_connect_before_on_close(connector: Connector):
     connector.disconnect()
     with patch.object(connector, 'on_close') as on_close:
         with pytest.raises(InvalidStateException):
-            d('e')
             connector._timeout = 0.1
             connector.connect()
             connector._timeout = 3
