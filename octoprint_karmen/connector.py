@@ -230,7 +230,6 @@ class Connector(metaclass=Singleton):
         with self.state_condition:
             self.wait_for_state(CONNECTED, DISCONNECTING)
             self.logger.info(f"Connection closed {close_status_code or 'no status code'} {close_msg or 'no message'}")
-            # TODO: is this still necessary after state_condition was implemented
             if not self._on_close_watchdog.cancel():
                 self.logger.debug("on_close watchdog not running")
             if close_status_code == -1 and close_msg == 'Watchdog!':
@@ -303,7 +302,10 @@ class RepeatedTimer:
     def stop(self):
         if self.is_running:
             self._timer_thread.cancel()
-            self._timer_thread.join()
+            try:
+                self._timer_thread.join()
+            except RuntimeError:
+                "Either started from this thread or not started at all."
             self._timer_thread = None
 
 
