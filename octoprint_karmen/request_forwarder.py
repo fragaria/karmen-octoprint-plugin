@@ -8,6 +8,7 @@ from urllib.parse import urljoin, urlparse
 import io
 from .buffer_struct import Struct, BytesField, UIntField
 from octoprint.settings import settings
+from octoprint.webcams import get_snapshot_webcam
 
 logging.basicConfig(level=logging.DEBUG)
 
@@ -93,7 +94,7 @@ class Channel:
 
     @cached_property
     def snapshot_url(self):
-        return settings().get(["webcam", "snapshotUrl"])
+        return get_snapshot_webcam().config.snapshotDisplay
 
     @cached_property
     def path_whitelist(self):
