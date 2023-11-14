@@ -93,8 +93,7 @@ class Channel:
 
     @cached_property
     def snapshot_url(self):
-        s = settings()
-        return s.get(["webcam", "snapshot"])
+        return settings().get(["webcam", "snapshotUrl"])
 
     @cached_property
     def path_whitelist(self):
