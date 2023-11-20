@@ -30,7 +30,7 @@ $(function () {
               }
               if (status == 'connected') {
                  self.iconTitle('<span class="text-success">Connected</span>');
-                 self.connectionStatusDescription("Click the icon to go to see your printer in Karmen Cloud.");
+                 self.connectionStatusDescription("Click the icon to go to Karmen Cloud.");
               } else if (status == 'connecting') {
                  self.iconTitle('<span class="text-warning">Connecting ...</span>');
                  self.connectionStatusDescription("Connecting to Karmen servers. " + (data.error ? `<p>Last error was:</p> <pre>${data.error}</pre>` : ""));
