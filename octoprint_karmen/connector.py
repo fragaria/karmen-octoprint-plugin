@@ -223,7 +223,6 @@ class Connector(metaclass=Singleton):
         """
         self.logger.debug('on_error called')
         self.logger.exception(error)
-        self.logger.info(f'Got error {str(error)} {error=} of class {error.__class__.__name__} with variables {vars(error)=}.')
         self.sentry.captureException(error)
         self.last_error = error
         with self.state_condition:
