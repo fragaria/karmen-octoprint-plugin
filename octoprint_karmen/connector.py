@@ -54,6 +54,7 @@ class Connector(metaclass=Singleton):
         self.ws = None
         self.ws_thread = None
         self.request_forwarder = None
+        self.on_state_change = None  # hook to notify about state changes
         self._reconnection_timer: Optional[Timer] = None  # reconnection timer (None if reconnection is not scheduled)
         # TODO: remove or move to timer
         self._reconnection_timer_lock = threading.Lock()
@@ -68,6 +69,7 @@ class Connector(metaclass=Singleton):
             lambda :self.on_close(self, -1, 'Watchdog!'),
             logger
         )
+        self.last_error = None
 
         # TODO:
         # Condition to wait for the right state
@@ -84,6 +86,7 @@ class Connector(metaclass=Singleton):
         self.__state = new_state
         self.logger.debug('Setting state to %s', self.state)
         self.state_condition.notify()
+        self.on_state_change()
 
     def wait_for_state(self, *states, timeout=0.1):
         self.logger.debug("... waiting for %s state(s) (current: %s)", states, self.state)
@@ -187,6 +190,8 @@ class Connector(metaclass=Singleton):
     def _on_timer_tick(self):
         if self.connected:
             self.ping_pong.ping(self.reconnect)
+        if self.on_state_change:
+            self.on_state_change()
 
     def on_message(self, ws, message):
         "process message"
@@ -211,14 +216,16 @@ class Connector(metaclass=Singleton):
                 self.sentry.captureException(e)
 
 
-    def on_error(self, ws, error):
+    def on_error(self, ws, error: Exception):
         """process error event from underlaying websocket
 
         The on_close is called just after on_error
         """
         self.logger.debug('on_error called')
         self.logger.exception(error)
+        self.logger.info(f'Got error {str(error)} {error=} of class {error.__class__.__name__} with variables {vars(error)=}.')
         self.sentry.captureException(error)
+        self.last_error = error
         with self.state_condition:
             self.set_state(DISCONNECTING)
 
@@ -244,6 +251,7 @@ class Connector(metaclass=Singleton):
         self._try_auto_reconnect()
 
     def on_open(self, ws):
+        self.last_error = None
         self.logger.debug(f"On_open with thred {self.ws_thread}")
         with self.state_condition:
             try:

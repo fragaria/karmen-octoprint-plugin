@@ -1,6 +1,8 @@
 # coding=utf-8
 from __future__ import absolute_import
 
+import flask
+from websocket import WebSocketBadStatusException, WebSocketTimeoutException
 from octoprint.settings import settings
 import octoprint.plugin
 from octoprint.util.version import is_octoprint_compatible
@@ -13,6 +15,7 @@ class KarmenPlugin(
     octoprint.plugin.TemplatePlugin,
     octoprint.plugin.StartupPlugin,
     octoprint.plugin.ShutdownPlugin,
+    octoprint.plugin.SimpleApiPlugin,
 ):
 
     ##~~ SettingsPlugin mixin
@@ -100,6 +103,15 @@ class KarmenPlugin(
         self._logger.info("Settings saved")
         self.ws_proxy_reconnect()
 
+
+    def get_api_commands(self):
+        return {}
+
+    def on_api_get(self, request):
+        'update status'
+        self.send_status_message()
+        return flask.jsonify(**self.get_status())
+
     def ws_proxy_reconnect(self):
         "reload settings and reconnect"
         self._logger.info("🍓 Karmen plugin reconnecting...")
@@ -128,6 +140,34 @@ class KarmenPlugin(
             'path_whitelist': parse_path_whitelist(self._settings.get(["path_whitelist"])),
         }
 
+    def get_status(self):
+        "format status"
+        if not self._connector:
+            return {"connectionStatus": "loading", "error": None, "advise": None}
+        error = self._connector.last_error
+        advise = 'Try to restart Octoprint'
+        advise_check_internet = '<strong>Check internet connection.</strong>'
+        if isinstance(error, WebSocketBadStatusException) and error.status_code == 401:
+            error = 'Unauthorized'
+            advise = 'Check your device key in karmen plugin settings.'
+        elif isinstance(error, ConnectionRefusedError):
+            error = 'Connection refused'
+            advise = advise_check_internet
+        elif isinstance(error, WebSocketTimeoutException):
+            error = f'No response from internet'
+            advise = advise_check_internet
+        elif error:
+            error = f'<pre>{error}</pre>'
+        return {
+            'connectionStatus': self._connector.state,
+            'error': error,
+            'advise': advise if error else None,
+        }
+
+    def send_status_message(self):
+        "publishes connection changes to frontend"
+        self._plugin_manager.send_plugin_message(self._identifier, self.get_status())
+
     def ws_get_connector(self):
         "return connector or None if settings are not applicable"
         ws_server_url = self._settings.get(["ws_server"])
@@ -147,6 +187,7 @@ class KarmenPlugin(
             self._connector = None
         else:
             self._connector = Connector(self._logger, self.sentry, **connector_config)
+            self._connector.on_state_change = self.send_status_message
         return self._connector
 
     def on_startup(self, host, port):
@@ -156,6 +197,7 @@ class KarmenPlugin(
         self.port = port
 
     def on_after_startup(self):
+        self.send_status_message()
         self._logger.info("🍓 Karmen plugin is starting...")
         if self.ws_get_connector():
             self._connector.connect()

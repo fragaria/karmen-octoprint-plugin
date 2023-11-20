@@ -1,0 +1,37 @@
+<style>
+.karmen-ico {
+    background-image: url('/plugin/karmen/static/img/karmen-logo.svg');
+    background-size: 100% 100%;
+    background-repeat: no-repeat;
+    display: block;
+    width: 1em;
+    height: 100%;
+}
+.karmen-status-connecting, .karmen-status-disconnecting {
+    animation: karmen-blinker 1s linear infinite;
+}
+
+.karmen-status-disconnected {
+    filter: saturate(5%);
+    opacity: 50%;
+}
+
+.karmen-status-connected {
+}
+
+@keyframes karmen-blinker {
+  50% {
+    opacity: 50%;
+    transform: scale(1.3);
+  }
+}
+</style>
+<a
+    href="https://cloud.karmen.tech"
+    id="karmen-navbar-icon"
+    target="karmen"
+    class="pull-right"
+    data-bind="popover: { placement: 'bottom', title: iconTitle , html: true, content: connectionStatusDescription, trigger: 'hover' }" >
+<span class="karmen-ico" data-bind="class: connectionStatus()"
+    >&nbsp;</span>
+</a>
