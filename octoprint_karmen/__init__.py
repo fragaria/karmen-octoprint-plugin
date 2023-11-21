@@ -7,7 +7,7 @@ from octoprint.settings import settings
 import octoprint.plugin
 from octoprint.util.version import is_octoprint_compatible
 from .connector import Connector
-from .utils import SentryWrapper, parse_path_whitelist
+from .utils import SentryWrapper, parse_path_whitelist, get_ip
 
 class KarmenPlugin(
     octoprint.plugin.SettingsPlugin,
@@ -109,8 +109,9 @@ class KarmenPlugin(
 
     def on_api_get(self, request):
         'update status'
-        self.send_status_message()
-        return flask.jsonify(**self.get_status())
+        if 'update_status' in request.args:
+            self.send_status_message()
+        return flask.jsonify(**self.get_status('with_ip_address' in request.args))
 
     def ws_proxy_reconnect(self):
         "reload settings and reconnect"
@@ -140,29 +141,33 @@ class KarmenPlugin(
             'path_whitelist': parse_path_whitelist(self._settings.get(["path_whitelist"])),
         }
 
-    def get_status(self):
+    def get_status(self, with_ip=False):
         "format status"
-        if not self._connector:
-            return {"connectionStatus": "loading", "error": None, "advise": None}
-        error = self._connector.last_error
-        advise = 'Try to restart Octoprint'
-        advise_check_internet = '<strong>Check internet connection.</strong>'
-        if isinstance(error, WebSocketBadStatusException) and error.status_code == 401:
-            error = 'Unauthorized'
-            advise = 'Check your device key in karmen plugin settings.'
-        elif isinstance(error, ConnectionRefusedError):
-            error = 'Connection refused'
-            advise = advise_check_internet
-        elif isinstance(error, WebSocketTimeoutException):
-            error = f'No response from internet'
-            advise = advise_check_internet
-        elif error:
-            error = f'<pre>{error}</pre>'
-        return {
-            'connectionStatus': self._connector.state,
-            'error': error,
-            'advise': advise if error else None,
-        }
+        if self._connector:
+            error = self._connector.last_error
+            advise = 'Try to restart Octoprint'
+            advise_check_internet = '<strong>Check internet connection.</strong>'
+            if isinstance(error, WebSocketBadStatusException) and error.status_code == 401:
+                error = 'Unauthorized'
+                advise = 'Check your device key in karmen plugin settings.'
+            elif isinstance(error, ConnectionRefusedError):
+                error = 'Connection refused'
+                advise = advise_check_internet
+            elif isinstance(error, WebSocketTimeoutException):
+                error = f'No response from internet'
+                advise = advise_check_internet
+            elif error:
+                error = f'<pre>{error}</pre>'
+            response_payload = {
+                'connectionStatus': self._connector.state,
+                'error': error,
+                'advise': advise if error else None,
+            }
+        else:
+            response_payload = {"connectionStatus": "loading", "error": None, "advise": None}
+        if with_ip:
+            response_payload['ipAddress'] = get_ip()
+        return response_payload
 
     def send_status_message(self):
         "publishes connection changes to frontend"
