@@ -118,7 +118,7 @@ $(function () {
 
         self.onStartupComplete = function () {
            // ping server to send current status
-           $.get('/api/plugin/karmen');
+           $.get('/api/plugin/karmen?update_status');
         }
     }
 
