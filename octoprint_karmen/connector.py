@@ -5,9 +5,12 @@ import threading
 from dataclasses import dataclass
 from threading import Timer
 import io
+import sentry_sdk
 import websocket
 import atexit
 from .utils.singleton import Singleton
+from .utils.sentry import capture_exception
+from .utils import wait_till_true
 from .request_forwarder import (
     RequestForwarder,
     ForwarderMessage,
@@ -46,7 +49,7 @@ DISCONNECTING = 'disconnecting'
 
 class Connector(metaclass=Singleton):
 
-    def __init__(self, logger: logging.Logger, sentry, **config):
+    def __init__(self, logger: logging.Logger, **config):
         #
         self.__state = DISCONNECTED
         self._timeout = 3
@@ -60,7 +63,6 @@ class Connector(metaclass=Singleton):
         self._reconnection_timer_lock = threading.Lock()
         self._heartbeat_clock = RepeatedTimer(self._timeout*3, logger, self._on_timer_tick)
         self.logger = logger
-        self.sentry = sentry
         self.config: Optional[Config] = None
 
         self.set_config(config)
@@ -86,7 +88,8 @@ class Connector(metaclass=Singleton):
         self.__state = new_state
         self.logger.debug('Setting state to %s', self.state)
         self.state_condition.notify()
-        self.on_state_change()
+        if self.on_state_change:
+            self.on_state_change()
 
     def wait_for_state(self, *states, timeout=0.1):
         self.logger.debug("... waiting for %s state(s) (current: %s)", states, self.state)
@@ -123,37 +126,75 @@ class Connector(metaclass=Singleton):
         self.logger.info(f"Connecting to {self.config.ws_url}")
         with self.state_condition:
             self.wait_for_state(DISCONNECTED)
-            self.logger.debug("... connecting ...")
-            with self._reconnection_timer_lock:
-                if self._reconnection_timer:
-                    self._reconnection_timer.cancel()
-                    self._reconnection_timer = None
-            self.ws = self._get_websocket(
-                self.config.ws_url,
-                on_open=self.on_open,
-                on_message=self.on_message,
-                on_error=self.on_error,
-                on_close=self.on_close,
-            )
-            self.request_forwarder = RequestForwarder(self.config.base_uri, self.ws, self.logger, self.config.path_whitelist, self.sentry)
-            self.logger.debug('... creating ws thread (was %r).', self.ws_thread)
-            self.ws_thread = threading.Thread(
-                name='WS Thread',
-                target=self.ws.run_forever, kwargs={
-                    "skip_utf8_validation": True,
-                },
-                daemon=True,
-            )
-            self.logger.debug('... starting websocket thread %r.', self.ws_thread)
-            self.set_state(CONNECTING)
-            self.ws_thread.start()
-            self.ws.sock.settimeout(self._timeout)
-            self.ping_pong = PingPonger(self.ws, self.logger, self.sentry)
             try:
-                self.wait_for_state(CONNECTED, timeout=1)
-            except InvalidStateException:
-                pass
-            return self.ws
+                self.logger.debug("... connecting ...")
+                with self._reconnection_timer_lock:
+                    if self._reconnection_timer:
+                        self._reconnection_timer.cancel()
+                        self._reconnection_timer = None
+                self.ws = self._get_websocket(
+                    self.config.ws_url,
+                    on_open=self.on_open,
+                    on_message=self.on_message,
+                    on_error=self.on_error,
+                    on_close=self.on_close,
+                )
+                self.request_forwarder = RequestForwarder(self.config.base_uri, self.ws, self.logger, self.config.path_whitelist)
+                self.logger.debug('... creating ws thread (was %r).', self.ws_thread)
+
+                def on_error(error):
+                    """try to fix starting error state and recover
+
+                    When the code gets here, it means that there is something
+                    really bad. This code tries the best to rescue the internal
+                    state.
+
+                    The best solution for future would be to make rewrite whole
+                    connector to run in a separate thread (rather than starting
+                    just the unreliable websocket in thread. This would
+                    simplify deisng and make it possible to restart plugin
+                    without restarting Octoprint.
+                    """
+                    self.last_error = error
+                    # set to disconnected to prevent waiting for lock on state
+                    try:
+                        acquired = self.state_condition.wait(0)
+                        if self.state == CONNECTING and acquired:
+                            self.set_state(DISCONNECTED)
+                        self.on_error(self.ws, error)
+                    except RuntimeError:
+                        self.on_error(self.ws, error)
+                    self.on_close(self.ws, None, f'Unable to start thred {error}')
+
+                def run_thread(*args, **kwargs):
+                    'proxy method to help sentry indentify exception source'
+                    with capture_exception(reraise=False, on_error=on_error):
+                        return self.ws.run_forever(*args, **kwargs)
+
+                self.ws_thread = threading.Thread(
+                    name='WS Thread',
+                    target=run_thread,
+                    kwargs={
+                        "skip_utf8_validation": True,
+                    },
+                    daemon=True,
+                )
+                self.logger.debug('... starting websocket thread %r.', self.ws_thread)
+                self.set_state(CONNECTING)
+                self.ws_thread.start()
+                # wait for the websocket's socket to be created
+                if wait_till_true(lambda: self.ws.sock):
+                    self.ws.sock.settimeout(self._timeout)
+                self.ping_pong = PingPonger(self.ws, self.logger)
+                try:  # just wait for connection to leave connect() when connected
+                    self.wait_for_state(CONNECTED, timeout=1)
+                except InvalidStateException:
+                    pass
+                return self.ws
+            except Exception as error:
+                if self.ws:
+                    self.ws.close()
+                self.on_error(self.ws, error)
 
     def _get_websocket(self, *args, **kwargs) -> websocket.WebSocketApp:
         "test injection point"
@@ -195,26 +236,12 @@ class Connector(metaclass=Singleton):
 
     def on_message(self, ws, message):
         "process message"
-        try:
+        with capture_exception(reraise=False):
             data = ForwarderMessage(message)
-        except Exception as e:
-            logging.warning(e)
-            self.sentry.captureException(e)
-            return
-        if data.channel == 'ping-pong':
-            try:
+            if data.channel == 'ping-pong':
                 self.ping_pong.handle_request(data)
-            except Exception as e:
-                logging.warning(e)
-                self.sentry.captureException(e)
-                return
-        else:
-            try:
+            else:
                 self.request_forwarder.handle_request(data)
-            except Exception as e:
-                logging.error(e)
-                self.sentry.captureException(e)
-
 
     def on_error(self, ws, error: Exception):
         """process error event from underlaying websocket
@@ -223,10 +250,11 @@ class Connector(metaclass=Singleton):
         """
         self.logger.debug('on_error called')
         self.logger.exception(error)
-        self.sentry.captureException(error)
+        sentry_sdk.capture_exception(error)
         self.last_error = error
-        with self.state_condition:
-            self.set_state(DISCONNECTING)
+        if self.state != DISCONNECTED:
+            with self.state_condition:
+                    self.set_state(DISCONNECTING)
 
     def on_close(self, ws, close_status_code=None, close_msg=None):
         self.logger.debug('on_close called')
@@ -317,11 +345,10 @@ class RepeatedTimer:
 
 
 class PingPonger:
-    def __init__(self, ws, logger, sentry):
+    def __init__(self, ws, logger):
         self.logger = logger
         self.ws = ws
         self.gotPong = True
-        self.sentry = sentry
 
     def handle_request(self, message):
         if message.event == "pong":
@@ -331,33 +358,30 @@ class PingPonger:
     def ping(self, on_close):
         if not self.gotPong:
             self.logger.warning("No pong response received")
-            self.sentry.captureMessage("No pong received")
-            try:
+            with capture_exception(reraise=False):
                 self.logger.warning("closing connection")
                 on_close()
                 return
-            except Exception as e:
-                self.logger.error("Unable to reconnect %s", e)
-                self.sentry.captureException(e)
         else:
-            self.logger.debug("Going to ping")
-            buf = io.BytesIO()
-            msg = {
-                "channel": str.encode("ping-pong"),
-                "event": str.encode("ping"),
-                "dataType": MessageType.NONE.value,
-                "data": b"",
-            }
+            with capture_exception():
+                self.logger.debug("Going to ping")
+                buf = io.BytesIO()
+                msg = {
+                    "channel": str.encode("ping-pong"),
+                    "event": str.encode("ping"),
+                    "dataType": MessageType.NONE.value,
+                    "data": b"",
+                }
 
-            BufferMessage.pack(msg, buf)
-            buf.seek(0)
-            try:
-                self.ws.send(buf.read(), websocket.ABNF.OPCODE_BINARY)
-            except websocket.WebSocketException as error:
-                self.logger.info(f"Websocket exception {error} during ping. Closing connection.")
-                on_close()
+                BufferMessage.pack(msg, buf)
+                buf.seek(0)
+                try:
+                    self.ws.send(buf.read(), websocket.ABNF.OPCODE_BINARY)
+                except websocket.WebSocketException as error:
+                    self.logger.info(f"Websocket exception {error} during ping. Closing connection.")
+                    on_close()
 
-            self.gotPong = False
+                self.gotPong = False
 
 
 class OnCloseTimer:

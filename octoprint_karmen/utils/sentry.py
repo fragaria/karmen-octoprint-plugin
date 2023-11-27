@@ -1,14 +1,18 @@
 import logging
 import sentry_sdk
 import traceback
+from contextlib import contextmanager
 from sentry_sdk.integrations.threading import ThreadingIntegration
 from sentry_sdk.integrations.logging import LoggingIntegration
-import requests
+
 
 class SentryWrapper:
 
     def __init__(self, plugin):
+
         def before_send(event, hint):
+            if not self.enabled():
+                return None
             if 'exc_info' in hint:
                 exc_type, exc_value, tb = hint['exc_info']
                 # exclude exceptions which does not contain /octoprint_karmen/
@@ -36,14 +40,14 @@ class SentryWrapper:
     def enabled(self):
         return self.plugin._settings.get(["sentry_opt"]) != 'out'
 
-    def init_context(self):
-        if self.enabled():
-            sentry_sdk.set_user({'id': self.plugin.key()})
 
-    def captureException(self, *args, **kwargs):
-        if self.enabled():
-            sentry_sdk.capture_exception(*args, **kwargs)
-
-    def captureMessage(self, *args, **kwargs):
-        if self.enabled():
-            sentry_sdk.capture_message(*args, **kwargs)
+@contextmanager
+def capture_exception(reraise=True, on_error=None):
+    try:
+        yield
+    except Exception as error:
+        if on_error:
+            on_error(error)
+        sentry_sdk.capture_exception(error)
+        if reraise:
+            raise
