@@ -1,5 +1,6 @@
 import logging
 import sentry_sdk
+import traceback
 from sentry_sdk.integrations.threading import ThreadingIntegration
 from sentry_sdk.integrations.logging import LoggingIntegration
 import requests
@@ -10,9 +11,11 @@ class SentryWrapper:
         def before_send(event, hint):
             if 'exc_info' in hint:
                 exc_type, exc_value, tb = hint['exc_info']
-                if isinstance(exc_value, requests.exceptions.RequestException):
-                    event['fingerprint'] = ['database-unavailable']
-            return event
+                # exclude exceptions which does not contain /octoprint_karmen/
+                # in list of source files in traceback
+                if any(filter(lambda frame: '/octoprint_karmen/' in frame[0], traceback.StackSummary.extract(traceback.walk_tb(tb), limit=1000))):
+                    return event
+            return None
 
         self.plugin = plugin
         sentry_sdk.init(
