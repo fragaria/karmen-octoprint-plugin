@@ -1,6 +1,7 @@
 # coding=utf-8
 from __future__ import absolute_import
 
+import sentry_sdk
 import flask
 from websocket import WebSocketBadStatusException, WebSocketTimeoutException
 from octoprint.settings import settings
@@ -8,6 +9,8 @@ import octoprint.plugin
 from octoprint.util.version import is_octoprint_compatible
 from .connector import Connector
 from .utils import SentryWrapper, parse_path_whitelist, get_ip
+from .utils.sentry import capture_exception
+
 
 class KarmenPlugin(
     octoprint.plugin.SettingsPlugin,
@@ -35,22 +38,23 @@ class KarmenPlugin(
         }
 
     def get_template_vars(self):
-        host = 'localhost' if self.host == '::' else self.host
-        key = self._settings.get(["karmen_key"])
-        if (key and len(key) <= 4):
-            key_redacted = key
-        else:
-            key_redacted = (key[:2] + "*" * (len(key) - 4) + key[-2:]) if key else None
-        return {
-            "is_octoprint_compatible": self.is_octoprint_compatible,
-            "ws_server": self._settings.get(["ws_server"]),
-            "path_whitelist": list(parse_path_whitelist(self._settings.get(["path_whitelist"]))),
-            "api_port": self.port,
-            "api_host": host,
-            "karmen_key_redacted": key_redacted,
-            "snapshot_url": settings().get(["webcam", "snapshot"]),
-            "sentry_opt": settings().get(["sentry_opt"]),
-        }
+        with capture_exception():
+            host = 'localhost' if self.host == '::' else self.host
+            key = self._settings.get(["karmen_key"])
+            if (key and len(key) <= 4):
+                key_redacted = key
+            else:
+                key_redacted = (key[:2] + "*" * (len(key) - 4) + key[-2:]) if key else None
+            return {
+                "is_octoprint_compatible": self.is_octoprint_compatible,
+                "ws_server": self._settings.get(["ws_server"]),
+                "path_whitelist": list(parse_path_whitelist(self._settings.get(["path_whitelist"]))),
+                "api_port": self.port,
+                "api_host": host,
+                "karmen_key_redacted": key_redacted,
+                "snapshot_url": settings().get(["webcam", "snapshot"]),
+                "sentry_opt": settings().get(["sentry_opt"]),
+            }
 
     def get_template_configs(self):
         return [dict(type="settings", custom_bindings=False)]
@@ -99,9 +103,10 @@ class KarmenPlugin(
 
     def on_settings_save(self, data):
         "update settings and reconnect"
-        octoprint.plugin.SettingsPlugin.on_settings_save(self, data)
-        self._logger.info("Settings saved")
-        self.ws_proxy_reconnect()
+        with capture_exception():
+            octoprint.plugin.SettingsPlugin.on_settings_save(self, data)
+            self._logger.info("Settings saved")
+            self.ws_proxy_reconnect()
 
 
     def get_api_commands(self):
@@ -109,9 +114,10 @@ class KarmenPlugin(
 
     def on_api_get(self, request):
         'update status'
-        if 'update_status' in request.args:
-            self.send_status_message()
-        return flask.jsonify(**self.get_status('with_ip_address' in request.args))
+        with capture_exception():
+            if 'update_status' in request.args:
+                self.send_status_message()
+            return flask.jsonify(**self.get_status('with_ip_address' in request.args))
 
     def ws_proxy_reconnect(self):
         "reload settings and reconnect"
@@ -121,11 +127,18 @@ class KarmenPlugin(
         else:
             self._connector.set_config(self.ws_get_connector_config())
         if self._connector:
-            self._connector.reconnect()
+            try:
+                self._connector.reconnect()
+            except Exception as error:
+                sentry_sdk.capture_exception(error)
+                try:
+                    self._connector.disconnect()
+                finally:
+                    self._connector = None
 
     def ws_get_connector_config(self):
         "return connector or None if settings are not applicable"
-        self.sentry.init_context()
+        sentry_sdk.set_user({'id': self.key()})
         ws_server_url = self._settings.get(["ws_server"])
         key = self._settings.get(["karmen_key"])
 
@@ -191,26 +204,29 @@ class KarmenPlugin(
             self._logger.error(error)
             self._connector = None
         else:
-            self._connector = Connector(self._logger, self.sentry, **connector_config)
+            self._connector = Connector(self._logger, **connector_config)
             self._connector.on_state_change = self.send_status_message
         return self._connector
 
     def on_startup(self, host, port):
-        self.is_octoprint_compatible = is_octoprint_compatible(">1.8")
-        self._connector = None
-        self.host = host
-        self.port = port
+        with capture_exception():
+            self.is_octoprint_compatible = is_octoprint_compatible(">1.8")
+            self._connector = None
+            self.host = host
+            self.port = port
 
     def on_after_startup(self):
-        self.send_status_message()
-        self._logger.info("🍓 Karmen plugin is starting...")
-        if self.ws_get_connector():
-            self._connector.connect()
+        with capture_exception():
+            self.send_status_message()
+            self._logger.info("🍓 Karmen plugin is starting...")
+            if self.ws_get_connector():
+                self._connector.connect()
 
     def on_shutdown(self):
-        self._logger.info("🍓 Karmen plugin shutdown...")
-        if self._connector:
-            self._connector.disconnect()
+        with capture_exception():
+            self._logger.info("🍓 Karmen plugin shutdown...")
+            if self._connector:
+                self._connector.disconnect()
 
     def key(self):
         return self._settings.get(["karmen_key"])

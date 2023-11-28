@@ -44,13 +44,12 @@ class ForwarderMessage:
 
 
 class RequestForwarder:
-    def __init__(self, base_uri, ws, logger, path_whitelist, sentry):
+    def __init__(self, base_uri, ws, logger, path_whitelist):
         self.base_uri = base_uri
         self.ws = ws
         self._channels = {}
         self.logger = logger
         self.path_whitelist = path_whitelist
-        self.sentry = sentry
 
     def handle_request(self, message):
         channel_id = message.channel

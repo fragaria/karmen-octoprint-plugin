@@ -120,7 +120,6 @@ def connector():
         }
         connector = Connector(
             logger=logger,
-            sentry=MagicMock(),
             **config
         )
         connector.set_config(config)

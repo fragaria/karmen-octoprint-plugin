@@ -61,7 +61,8 @@ class WebSockAppMock(websocket.WebSocketApp):
                     event = self._m_received.pop()
                     if event.name.startswith('_m_'):  # run ws app method from within loop
                         getattr(self, event.name[3:])(*event.args, **event.kwargs)
-                    elif hasattr(self, f'on_{event.name}'):  # pretend an event
+                    elif getattr(self, f'on_{event.name}', None):  # pretend an event
+                        print(f'calling on_{event.name} {getattr(self, "on_%s" % event.name)}')
                         getattr(self, f'on_{event.name}')(self, *event.args, **event.kwargs)
                 time.sleep(0.01)
                 if not self._m_run:
