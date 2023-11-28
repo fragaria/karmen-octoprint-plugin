@@ -117,6 +117,9 @@ class KarmenPlugin(
         with capture_exception():
             if 'update_status' in request.args:
                 self.send_status_message()
+            # for testing purposes
+            if 'test_exception' in request.args:
+                raise Exception('Testing exception.')
             return flask.jsonify(**self.get_status('with_ip_address' in request.args))
 
     def ws_proxy_reconnect(self):
