@@ -162,7 +162,6 @@ class Channel:
         except Exception as e:
             self.logger.exception(e)
 
-
     @cached_property
     def snapshot_url(self):
         return get_snapshot_webcam().config.snapshotDisplay
@@ -182,11 +181,22 @@ class Channel:
             "port": ireq.get("headers", {}).get("x-karmen-port")
         }
         headers = ireq.get("headers")
-
         if headers["host"]:
             del headers["host"]
+        # Check file is not being downloaded. Otherwise return HTTP 503 to save device and bandwitch capacity.
+        if self.handler.is_downloading:
+            self.send(
+                "headers",
+                {
+                    "statusCode": 503,
+                    "statusMessage": "Download request is processing.",
+                    "headers": {'download-in-progress-percent': self.handler.download_progress_pct},
+                }
+            )
+            self.send("end")
+            return
         # For requests with x-karmen-port header check if this port matches webcam snapshot port
-        if self.req_params["port"]:
+        elif self.req_params["port"]:
             if self.snapshot_url:
                 parsed = urlparse(self.snapshot_url)
                 port = parsed.port
@@ -248,7 +258,6 @@ class Channel:
             self.connection.close()
         self.send("end")
 
-
     def handle_error(self, status=400, msg="Invalid request"):
         self.send(
             "headers",
@@ -260,7 +269,6 @@ class Channel:
         self.send("end")
         if self.connection:
             self.connection.close()
-
 
     def send(self, event, data=None):
         data_type = MessageType.BUFFER
@@ -281,5 +289,3 @@ class Channel:
         BufferMessage.pack(msg, buf)
         buf.seek(0)
         self.handler.ws.send(buf.read(), websocket.ABNF.OPCODE_BINARY)
-
-
