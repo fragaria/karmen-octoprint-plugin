@@ -129,14 +129,6 @@ class Channel:
                 self.logger.warning("Access to non default port is allowed for snapshot url only")
                 self.handle_error()
                 return
-        elif self.req_params["url"] == '/karmen-pill-info/get':
-            self.send("headers", {
-                    "statusCode": 200,
-                    "statusMessage": "OK",
-                    "headers": [("Content-type","application/json")],
-                    })
-            self.send("data", json.dumps({"system":{"karmen_versin": "plugin"}}).encode())
-            self.send("end")
             return
         else:
             # For octoprint requests check if path starts with /api/ so only API calls are allowed
