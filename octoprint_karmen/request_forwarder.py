@@ -1,10 +1,13 @@
 from werkzeug.utils import cached_property
+import os
 import http
 import websocket
 import json
 import logging
 from enum import Enum
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin, urlparse, parse_qs
+from urllib.request import urlretrieve
+import concurrent.futures
 import io
 from .buffer_struct import Struct, BytesField, UIntField
 from octoprint.settings import settings
@@ -50,6 +53,8 @@ class RequestForwarder:
         self._channels = {}
         self.logger = logger
         self.path_whitelist = path_whitelist
+        self.is_downloading = False
+        self.download_progress_pct = 0.00
 
     def handle_request(self, message):
         channel_id = message.channel
@@ -65,6 +70,73 @@ class RequestForwarder:
     def _destroy_channel(self, channel):
         if self._channels[channel.id] == channel:
             del self._channels[channel.id]
+
+
+"""
+Special type of request, that will download print file (gcode) to Octoprint
+gcodes folder. It's special type of request not to transfer big data
+through websocket tunnel between websocket proxy server and client.
+"""
+class FileDownloader:
+    _previous_progress_value = 0
+
+    def __init__(self, channel):
+        self.channel = channel
+        self.channel.handler.is_downloading = True
+        self.channel.handler.download_progress_pct = 0.00
+
+    # Function to receive data from channel
+    def send(self, data):
+        data = {key: value[0] for key, value in parse_qs(data.decode("utf-8")).items()}
+        self.download_file_async(
+            data["download_url"],  # download url
+            os.path.join(settings().getBaseFolder("uploads"), data["file_name"]),  # where to save file
+        )
+
+    # Function to be called when file is downloaded.
+    def download_callback(self, future):
+        try:
+            future.result()  # This will raise any exception caught during execution
+            # send response to client, that file is downloaded and ready to print
+            self.channel.send(
+                "headers",
+                {
+                    "statusCode": 200,
+                    "statusMessage": "OK",
+                    "headers": [("Content-type","application/json")]
+                },
+            )
+            self.channel.send("data", json.dumps({"message": "File downloaded."}).encode())
+            self.channel.send("end")
+            self.channel.handler.is_downloading = False
+        except Exception as e:
+            self.channel.handler.is_downloading = False
+            self.channel.handle_error(msg=f"An error occurred during the download: {e}")
+
+    # Download file asynchronously not to block main process/thread.
+    def download_file_async(self, download_url, file_path):
+        # Wrap the report hook to include self
+        def wrapped_report_hook(block_num, block_size, total_size):
+            self.download_progress_report_hook(block_num, block_size, total_size)
+        executor = concurrent.futures.ThreadPoolExecutor()
+        future = executor.submit(urlretrieve, download_url, file_path, wrapped_report_hook)
+        future.add_done_callback(self.download_callback)
+
+    def download_progress_report_hook(self, block_num, block_size, total_size):
+        if total_size > 0:
+            progress = round(min(block_num * block_size / total_size, 1.0) * 100, 2)
+        else:
+            progress = -1
+        # report progress in 5% intervals to protect system journal/log
+        if self._previous_progress_value < progress - 5:
+            self._previous_progress_value = progress
+            self.channel.logger.info(f"Download progress: {progress}%")
+        self.channel.handler.download_progress_pct = progress
+
+    # Dummy function to be called by channel. We don't want to close connection
+    # automatically and instead close it manually when file is downloaded
+    def dummy_end(channel, message):
+        pass
 
 
 class Channel:
@@ -129,6 +201,9 @@ class Channel:
                 self.logger.warning("Access to non default port is allowed for snapshot url only")
                 self.handle_error()
                 return
+        elif self.req_params["url"].startswith("/$download_file"):
+            self.connection = FileDownloader(self)
+            self.event_handlers['end'] = self.connection.dummy_end
             return
         else:
             # For octoprint requests check if path starts with /api/ so only API calls are allowed
