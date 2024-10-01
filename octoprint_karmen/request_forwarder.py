@@ -151,7 +151,8 @@ class Channel:
         self.connection.endheaders()
 
     def handle_data(self, message):
-        self.connection.send(message.data.encode())
+        if self.connection:
+            self.connection.send(message.data.encode())
 
     def handle_end(self, message):
         if self.connection:
